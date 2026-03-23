@@ -1,10 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import process from "node:process";
 
+import { getTeamByName } from "../config/team-config.js";
 import { initAppend, emit as emitLogEvent, RunDir } from "../logging/log.js";
 import { getRunById } from "../logging/runs.js";
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
+import { availableBackends, preflightWarningsForBackends } from "./backends.js";
+import { backendForOrchestrator, createSessionForOrchestrator } from "./sessions.js";
 import type { ExecutionResult } from "./types.js";
 
 type ResumeTarget = {
@@ -75,7 +79,11 @@ function buildGenericSummary(goal: string, params: ResolvedRuntimeParams): strin
   return `Completed 1 cycle with ${params.orchestrator} (${params.orchestratorModel}) for goal: ${goal.replace(/\s+/gu, " ").trim()}`;
 }
 
-function buildArtifacts(runDir: RunDir, goal: ResolvedGoal, flags: MainFlags): { reportPath: string | null; reportTitle: string | null } {
+function buildArtifacts(
+  runDir: RunDir,
+  goal: ResolvedGoal,
+  flags: MainFlags,
+): { reportPath: string | null; reportTitle: string | null } {
   if (goal.source === "improve") {
     const reportPath = path.join(runDir.root, "improve-report.md");
     writeReport(reportPath, buildImproveReport(goal.goalText ?? "", flags.project));
@@ -89,25 +97,61 @@ function buildArtifacts(runDir: RunDir, goal: ResolvedGoal, flags: MainFlags): {
   return { reportPath: null, reportTitle: null };
 }
 
-export function executePendingRun(
+function buildRuntimeSummary(
+  params: ResolvedRuntimeParams,
+  goalText: string,
+  responseText: string | null,
+): string {
+  const normalizedGoal = goalText.replace(/\s+/gu, " ").trim();
+  const normalizedResponse = responseText?.replace(/\s+/gu, " ").trim() ?? "";
+  if (normalizedResponse.length > 0) {
+    return `${params.orchestrator} (${params.orchestratorModel}): ${normalizedResponse.slice(0, 160)}`;
+  }
+  return buildGenericSummary(normalizedGoal, params);
+}
+
+function configuredBackends(params: ResolvedRuntimeParams, projectDir: string): string[] {
+  const backends = new Set<string>();
+  const listing = getTeamByName(params.team, undefined, projectDir);
+  if (listing !== null) {
+    for (const agent of Object.values(listing.config.agents)) {
+      backends.add(agent.backend);
+    }
+  }
+  const orchestratorBackend = backendForOrchestrator(params.orchestrator);
+  if (orchestratorBackend !== null) {
+    backends.add(orchestratorBackend);
+  }
+  return [...backends];
+}
+
+function shouldUseSessionRuntime(): boolean {
+  if (process.env.KODO_ENABLE_SESSION_RUNTIME === "1") {
+    return true;
+  }
+  if (process.env.VITEST) {
+    return false;
+  }
+  return true;
+}
+
+function syntheticExecutionResult(
   runDir: RunDir,
   params: ResolvedRuntimeParams,
   goal: ResolvedGoal,
   flags: MainFlags,
+  warning: string | null,
 ): ExecutionResult {
   const artifacts = buildArtifacts(runDir, goal, flags);
   const summary = buildGenericSummary(goal.goalText ?? "", params);
 
-  emitLogEvent("preflight_start", {
-    orchestrator: params.orchestrator,
-    project_dir: flags.project,
-    team: params.team,
-  });
-  emitLogEvent("preflight_end", {
-    ok: true,
-    orchestrator: params.orchestrator,
-    team: params.team,
-  });
+  if (warning !== null) {
+    emitLogEvent("orchestrator_fallback", {
+      orchestrator: params.orchestrator,
+      reason: warning,
+    });
+  }
+
   emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
   emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
   emitLogEvent("parallel_group_start", {
@@ -175,6 +219,152 @@ export function executePendingRun(
   };
 }
 
+export function executePendingRun(
+  runDir: RunDir,
+  params: ResolvedRuntimeParams,
+  goal: ResolvedGoal,
+  flags: MainFlags,
+): ExecutionResult {
+  const artifacts = buildArtifacts(runDir, goal, flags);
+  const backendWarnings = preflightWarningsForBackends(configuredBackends(params, flags.project));
+
+  emitLogEvent("preflight_start", {
+    orchestrator: params.orchestrator,
+    project_dir: flags.project,
+    team: params.team,
+  });
+  if (backendWarnings.length > 0) {
+    emitLogEvent("preflight_warnings", {
+      warnings: backendWarnings,
+    });
+  }
+  emitLogEvent("preflight_end", {
+    ok: true,
+    orchestrator: params.orchestrator,
+    team: params.team,
+    warnings: backendWarnings,
+  });
+
+  const sessionBackend = backendForOrchestrator(params.orchestrator);
+  if (
+    !shouldUseSessionRuntime() ||
+    process.env.KODO_ENABLE_SESSION_RUNTIME === "0" ||
+    sessionBackend === null ||
+    !availableBackends()[sessionBackend === "claude-cli" ? "claude" : sessionBackend]
+  ) {
+    const reason = !shouldUseSessionRuntime()
+      ? "Session runtime disabled for this environment"
+      : process.env.KODO_ENABLE_SESSION_RUNTIME === "0"
+        ? "Session runtime explicitly disabled"
+        : sessionBackend === null
+          ? `No session adapter for orchestrator ${params.orchestrator}`
+          : `Backend ${sessionBackend} is not installed; using synthetic runtime fallback`;
+    return syntheticExecutionResult(runDir, params, goal, flags, reason);
+  }
+
+  const session = createSessionForOrchestrator(params.orchestrator, params.orchestratorModel, {
+    resumeSessionId: loadResumeSessionId(runDir),
+  });
+
+  if (session === null) {
+    return syntheticExecutionResult(
+      runDir,
+      params,
+      goal,
+      flags,
+      `Unable to create session for orchestrator ${params.orchestrator}`,
+    );
+  }
+
+  try {
+    emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
+    emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
+    emitLogEvent("parallel_group_start", {
+      group: "implementation",
+      agents: [params.orchestrator],
+    });
+    emitLogEvent("cycle_start", {
+      cycle_index: 1,
+      orchestrator: params.orchestrator,
+      project_dir: flags.project,
+    });
+    emitLogEvent("agent_run_start", {
+      agent: "orchestrator",
+      model: params.orchestratorModel,
+      session: params.orchestrator,
+    });
+    emitLogEvent("orchestrator_tool_call", {
+      agent: "orchestrator",
+      cycle_index: 1,
+      tool: "implement_goal",
+    });
+
+    const response = session.query(goal.goalText ?? "", {
+      maxTurns: params.maxExchanges,
+      projectDir: flags.project,
+    });
+
+    const summary = buildRuntimeSummary(params, goal.goalText ?? "", response.text);
+
+    emitLogEvent("agent_run_end", {
+      agent: "orchestrator",
+      status: response.isError ? "failed" : "completed",
+    });
+    emitLogEvent("orchestrator_tool_result", {
+      agent: "orchestrator",
+      cycle_index: 1,
+      tool: "implement_goal",
+      ok: !response.isError,
+    });
+    emitLogEvent("parallel_group_end", {
+      group: "implementation",
+      finished: !response.isError,
+    });
+    emitLogEvent("cycle_end", {
+      cycle_index: 1,
+      exchanges: 1,
+      finished: !response.isError,
+      summary,
+    });
+    emitLogEvent(params.autoCommit ? "auto_commit_done" : "auto_commit_disabled", {
+      enabled: params.autoCommit,
+    });
+    emitLogEvent("persist_run_state", {
+      config_file: runDir.configFile,
+      goal_file: runDir.goalFile,
+      run_dir: runDir.root,
+    });
+    if (!response.isError) {
+      emitLogEvent("run_end", {
+        finished: true,
+        orchestrator: params.orchestrator,
+        summary,
+        total_cycles: 1,
+        total_exchanges: 1,
+      });
+    }
+
+    return {
+      artifacts,
+      cyclesCompleted: 1,
+      finished: !response.isError,
+      message: response.isError ? "Run failed." : "Run completed.",
+      runId: runDir.runId,
+      runRoot: runDir.root,
+      summary,
+    };
+  } finally {
+    try {
+      session.close();
+    } catch (error) {
+      emitLogEvent("session_cleanup_warning", {
+        session: session.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 function loadGoalText(runDir: RunDir): string {
   if (!existsSync(runDir.goalFile)) {
     throw new Error(`Goal file missing: ${runDir.goalFile}`);
@@ -189,14 +379,16 @@ function loadGoalText(runDir: RunDir): string {
 }
 
 function loadRuntimeParams(runDir: RunDir): ResolvedRuntimeParams {
-  const parsed = JSON.parse(readFileSync(runDir.configFile, "utf8")) as Partial<ResolvedRuntimeParams>;
+  const parsed = JSON.parse(
+    readFileSync(runDir.configFile, "utf8"),
+  ) as Partial<ResolvedRuntimeParams>;
   if (
-    typeof parsed.team !== "string"
-    || typeof parsed.orchestrator !== "string"
-    || typeof parsed.orchestratorModel !== "string"
-    || typeof parsed.maxExchanges !== "number"
-    || typeof parsed.maxCycles !== "number"
-    || typeof parsed.autoCommit !== "boolean"
+    typeof parsed.team !== "string" ||
+    typeof parsed.orchestrator !== "string" ||
+    typeof parsed.orchestratorModel !== "string" ||
+    typeof parsed.maxExchanges !== "number" ||
+    typeof parsed.maxCycles !== "number" ||
+    typeof parsed.autoCommit !== "boolean"
   ) {
     throw new Error(`Invalid run config: ${runDir.configFile}`);
   }
@@ -209,10 +401,30 @@ function loadRuntimeParams(runDir: RunDir): ResolvedRuntimeParams {
     orchestratorModel: parsed.orchestratorModel,
     team: parsed.team,
   };
-  if (parsed.effort === "low" || parsed.effort === "standard" || parsed.effort === "high" || parsed.effort === "max") {
+  if (
+    parsed.effort === "low" ||
+    parsed.effort === "standard" ||
+    parsed.effort === "high" ||
+    parsed.effort === "max"
+  ) {
     params.effort = parsed.effort;
   }
   return params;
+}
+
+function loadResumeSessionId(runDir: RunDir): string | null {
+  if (!existsSync(runDir.configFile)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(runDir.configFile, "utf8")) as Record<string, unknown>;
+    return typeof parsed.resumeSessionId === "string" && parsed.resumeSessionId.length > 0
+      ? parsed.resumeSessionId
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function fallbackRuntimeParams(run: ReturnType<typeof getRunById>): ResolvedRuntimeParams {
@@ -251,7 +463,9 @@ export function resumeRun(target: ResumeTarget): ExecutionResult {
 
   const runDir = RunDir.fromLogFile(target.logFile, state.projectDir);
   initAppend(target.logFile);
-  const params = existsSync(runDir.configFile) ? loadRuntimeParams(runDir) : fallbackRuntimeParams(state);
+  const params = existsSync(runDir.configFile)
+    ? loadRuntimeParams(runDir)
+    : fallbackRuntimeParams(state);
   const goalText = existsSync(runDir.goalFile) ? loadGoalText(runDir) : state.goal;
   const flags: MainFlags = {
     autoRefine: false,
@@ -278,8 +492,24 @@ export function resumeRun(target: ResumeTarget): ExecutionResult {
     yes: true,
   };
 
-  return executePendingRun(runDir, { ...params, maxCycles: Math.max(params.maxCycles, state.completedCycles + 1) }, {
-    goalText,
-    source: inferGoalSource(runDir),
-  }, flags);
+  const resumeSessionId =
+    state.agentSessionIds.orchestrator ??
+    state.agentSessionIds[params.orchestrator] ??
+    state.agentSessionIds[backendForOrchestrator(params.orchestrator) ?? ""];
+
+  if (resumeSessionId !== undefined && existsSync(runDir.configFile)) {
+    const config = JSON.parse(readFileSync(runDir.configFile, "utf8")) as Record<string, unknown>;
+    config.resumeSessionId = resumeSessionId;
+    writeFileSync(runDir.configFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  }
+
+  return executePendingRun(
+    runDir,
+    { ...params, maxCycles: Math.max(params.maxCycles, state.completedCycles + 1) },
+    {
+      goalText,
+      source: inferGoalSource(runDir),
+    },
+    flags,
+  );
 }
