@@ -1,24 +1,36 @@
 {
   "name": "kodo",
-  "version": "0.0.0",
+  "version": "0.4.261",
   "private": true,
-  "type": "module",
   "bin": {
     "kodo": "./dist/cli.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
+  "type": "module",
   "scripts": {
     "build": "vite build && chmod +x dist/cli.js",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
     "dev": "vite-node src/cli.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint src test vite.config.ts --type-aware --import-plugin --node-plugin --vitest-plugin",
+    "lint:fix": "oxlint src test vite.config.ts --type-aware --import-plugin --node-plugin --vitest-plugin --fix",
     "start": "node dist/cli.js",
-    "typecheck": "tsc --noEmit"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsgo --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "@typescript/native-preview": "^7.0.0-dev.20260322.1",
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.56.0",
+    "oxlint-tsgolint": "^0.17.1",
     "typescript": "^5.9.2",
     "vite": "^7.1.5",
-    "vite-node": "^3.2.4"
+    "vite-node": "^3.2.4",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
