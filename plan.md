@@ -31,20 +31,20 @@ Baseline:
 Deliverables:
 
 - [x] Audit the Python CLI surface and produce a command/flag parity matrix.
-- [ ] Audit all user-visible runtime behavior, not just CLI syntax.
-- [ ] Produce a complete feature inventory for every documented and shipped user-visible surface.
+- [x] Audit all user-visible runtime behavior, not just CLI syntax.
+- [x] Produce a complete feature inventory for every documented and shipped user-visible surface.
 - [x] Audit the Python test suite and produce a TS parity test migration matrix.
-- [ ] Identify external dependencies and their Node equivalents.
-- [ ] Decide which behaviors are exact-parity vs intentionally revised.
+- [x] Identify external dependencies and their Node equivalents.
+- [x] Decide which behaviors are exact-parity vs intentionally revised.
 - [x] Freeze the first migration target to the current Python repo state.
 
 Concrete tasks:
 
 - [x] Enumerate core CLI commands, aliases, and top-level flags used to drive the TS shell.
-- [ ] Enumerate all CLI commands, aliases, flags, defaults, and JSON output shapes exhaustively.
-  - [ ] Enumerate all subcommands and secondary entrypoints:
+- [x] Enumerate all CLI commands, aliases, flags, defaults, and JSON output shapes exhaustively.
+  - [x] Enumerate all subcommands and secondary entrypoints:
   - [x] `runs`, `logs`, `issue`, `backends`, `teams`, `update`
-  - [ ] `teams add`, `teams edit`, `teams auto`
+  - [x] `teams add`, `teams edit`, `teams auto`
   - [x] standalone viewer invocation paths
   - [x] singular/plural command aliases
   - [x] `test` / `improve` alias routing
@@ -59,18 +59,18 @@ Concrete tasks:
   - [x] `--focus`
   - [x] `--target`
   - [x] `--orchestrator-model` alias handling via TS parser
-- [ ] Enumerate all user-visible outputs and artifacts:
+- [x] Enumerate all user-visible outputs and artifacts:
   - [x] help/version shell
   - [x] JSON validation error mode
-  - [ ] terminal prompts and summaries
-  - [ ] banners, warnings, hints, and next-step messages
-  - [ ] report file names and sections
-  - [ ] run directory layout
-  - [ ] log event shapes
-  - [ ] viewer expectations
-  - [ ] resume behavior and session recovery semantics
-- [ ] Catalog filesystem layout for runs, logs, cached state, defaults, and generated artifacts.
-- [ ] Catalog environment variables and backend credential expectations.
+  - [x] terminal prompts and summaries
+  - [x] banners, warnings, hints, and next-step messages
+  - [x] report file names and sections
+  - [x] run directory layout
+  - [x] log event shapes
+  - [x] viewer expectations
+  - [x] resume behavior and session recovery semantics
+- [x] Catalog filesystem layout for runs, logs, cached state, defaults, and generated artifacts.
+- [x] Catalog environment variables and backend credential expectations.
 - [x] Record which Python tests define critical behavior that must be mirrored first.
 - [x] Classify the Python tests by migration status:
   - [x] `port-direct`
@@ -81,9 +81,13 @@ Exit criteria:
 
 - [x] A checked-in migration matrix exists.
 - [x] A checked-in parity matrix identifies the currently known user-visible feature set and migration status.
-- [ ] The parity matrix is exhaustive enough that removing any shipped Python user feature would show up as a gap, not as an implicit omission.
+- [x] The parity matrix is exhaustive enough that removing any shipped Python user feature would show up as a gap, not as an implicit omission.
 - [x] A checked-in test migration matrix maps the Python test suite to planned TS test files.
 - [ ] No unresolved runtime choice remains for any core dependency path.
+  - Documented remaining choices are now explicit instead of implicit:
+  - Prompt/banner wording parity remains scheduled work in Phase 4 and Phase 12.
+  - Viewer HTML richness, trace upload affordances, and expanded event coverage remain scheduled work in Phase 5.
+  - Backend credential handling, session-id resume, and env propagation remain scheduled work in Phase 6.
 
 ## Phase 1: Test Harness and Suite Skeleton
 
