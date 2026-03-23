@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { stringifyJson, toJsonObject } from "../runtime/json.js";
 import { parseRun } from "./runs.js";
 
 export class RunDir {
@@ -60,37 +61,6 @@ function timestampRunId(now = new Date()): string {
   return `${year}${month}${day}_${hour}${minute}${second}`;
 }
 
-function serialize(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return value ?? null;
-  }
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  if (typeof value === "function") {
-    return value.toString();
-  }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (value instanceof URL) {
-    return value.toString();
-  }
-  if (typeof value === "object" && "toJSON" in value && typeof value.toJSON === "function") {
-    return serialize(value.toJSON());
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => serialize(item));
-  }
-  if (typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, serialize(entry)]));
-  }
-  return JSON.stringify(value);
-}
-
 function appendEvent(event: string, fields: Record<string, unknown>): void {
   if (activeLogFile === null) {
     throw new Error("Log file has not been initialized.");
@@ -100,9 +70,9 @@ function appendEvent(event: string, fields: Record<string, unknown>): void {
     ts: new Date().toISOString(),
     t: Number(((Date.now() - startTime) / 1000).toFixed(3)),
     event,
-    ...Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, serialize(value)])),
+    ...toJsonObject(fields),
   };
-  appendFileSync(activeLogFile, `${JSON.stringify(record)}\n`, "utf8");
+  appendFileSync(activeLogFile, `${stringifyJson(record)}\n`, "utf8");
 }
 
 export function init(runDir: RunDir): string {

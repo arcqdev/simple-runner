@@ -15,6 +15,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { listRuns, runsRoot } from "./logging/runs.js";
+import { safeJoin } from "./runtime/fs.js";
 
 type ViewerOptions = {
   openBrowser?: boolean;
@@ -68,11 +69,12 @@ function loadEvents(logPath: string): unknown[] {
 }
 
 function loadRunLog(runId: string): string {
-  if (runId.includes("/") || runId.includes("\\") || runId.includes("..")) {
+  let runDir: string;
+  try {
+    runDir = safeJoin(runsRoot(), runId);
+  } catch {
     throw new Error("Invalid run_id");
   }
-
-  const runDir = path.join(runsRoot(), runId);
   const logFile = existsSync(path.join(runDir, "log.jsonl"))
     ? path.join(runDir, "log.jsonl")
     : path.join(runDir, "run.jsonl");
@@ -97,7 +99,8 @@ function buildHtml(logPath: string | null): string {
     projectDir: run.projectDir,
     runId: run.runId,
   }));
-  const title = logPath === null ? "kodo log viewer" : `kodo log viewer — ${path.basename(logPath)}`;
+  const title =
+    logPath === null ? "kodo log viewer" : `kodo log viewer — ${path.basename(logPath)}`;
 
   return `<!doctype html>
 <html lang="en">
@@ -358,7 +361,10 @@ export function openViewer(logPath: string | null = null, options: ViewerOptions
   return url;
 }
 
-export async function serveViewer(port: number, options: ServeViewerOptions = {}): Promise<ViewerServer> {
+export async function serveViewer(
+  port: number,
+  options: ServeViewerOptions = {},
+): Promise<ViewerServer> {
   const logPath = options.logPath ?? null;
   if (logPath !== null && !existsSync(logPath)) {
     throw new Error(`File not found: ${logPath}`);
@@ -384,7 +390,8 @@ export async function serveViewer(port: number, options: ServeViewerOptions = {}
         response.end(data);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const status = message === "Invalid run_id" ? 400 : message.startsWith("Run not found:") ? 404 : 500;
+        const status =
+          message === "Invalid run_id" ? 400 : message.startsWith("Run not found:") ? 404 : 500;
         response.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
         response.end(message);
       }
@@ -405,7 +412,9 @@ export async function serveViewer(port: number, options: ServeViewerOptions = {}
 
   const address = server.address();
   if (address === null || typeof address === "string") {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
     throw new Error("Failed to determine viewer server address.");
   }
 
@@ -425,7 +434,12 @@ export async function serveViewer(port: number, options: ServeViewerOptions = {}
   };
 }
 
-function parseViewerArgs(argv: string[]): { help: boolean; logfile: string | null; port: number; serve: boolean } {
+function parseViewerArgs(argv: string[]): {
+  help: boolean;
+  logfile: string | null;
+  port: number;
+  serve: boolean;
+} {
   let logfile: string | null = null;
   let port = 8080;
   let serve = false;

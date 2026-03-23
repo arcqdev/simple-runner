@@ -1,5 +1,7 @@
 import process from "node:process";
 
+import { stringifyJson } from "../runtime/json.js";
+
 export function writeStdout(text: string): void {
   process.stdout.write(text);
 }
@@ -9,7 +11,7 @@ export function writeStderr(text: string): void {
 }
 
 export function emitJson(payload: Record<string, unknown>): void {
-  writeStdout(`${JSON.stringify(payload)}\n`);
+  writeStdout(`${stringifyJson(payload)}\n`);
 }
 
 export function printLines(lines: string[]): void {

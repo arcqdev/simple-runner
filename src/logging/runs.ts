@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { safeJoin } from "../runtime/fs.js";
+
 export type RunState = {
   agentSessionIds: Record<string, string>;
   completedCycles: number;
@@ -101,7 +103,11 @@ export function parseRun(logFile: string): RunState | null {
         }
         break;
       case "agent_run_end":
-        if (pendingSessionId !== null && typeof event.agent === "string" && event.agent.length > 0) {
+        if (
+          pendingSessionId !== null &&
+          typeof event.agent === "string" &&
+          event.agent.length > 0
+        ) {
           agentSessionIds[event.agent] = pendingSessionId;
         }
         pendingSessionId = null;
@@ -163,10 +169,9 @@ export function parseRun(logFile: string): RunState | null {
           : "",
     runId: extractRunId(logFile),
     stageSummaries,
-    team:
-      Array.isArray(runStart.team)
-        ? runStart.team.filter((value): value is string => typeof value === "string")
-        : [],
+    team: Array.isArray(runStart.team)
+      ? runStart.team.filter((value): value is string => typeof value === "string")
+      : [],
     teamPreset:
       typeof cliArgs.team === "string"
         ? cliArgs.team
@@ -253,7 +258,12 @@ export function findIncompleteRuns(projectDir: string, homeDir = os.homedir()): 
 }
 
 export function getRunById(runId: string, homeDir = os.homedir()): RunState | null {
-  const runDir = path.join(runsRoot(homeDir), runId);
+  let runDir: string;
+  try {
+    runDir = safeJoin(runsRoot(homeDir), runId);
+  } catch {
+    return null;
+  }
   const logFile = path.join(runDir, "log.jsonl");
   const legacy = path.join(runDir, "run.jsonl");
   const candidate = existsSync(logFile) ? logFile : existsSync(legacy) ? legacy : null;

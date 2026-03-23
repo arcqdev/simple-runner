@@ -134,22 +134,26 @@ Exit criteria:
 
 Deliverables:
 
-- [ ] Node/TS runtime conventions finalized.
-- [ ] Base library dependencies installed.
+- [x] Node/TS runtime conventions finalized.
+- [x] Base library dependencies installed.
 - [x] Shared utilities and domain types created for the current CLI shell.
 
 Concrete tasks:
 
-- [ ] Choose core libraries for prompts, validation, env loading, and process execution.
+- [x] Choose core libraries for prompts, validation, env loading, and process execution.
 - [x] Add structured CLI error handling and JSON serialization helpers.
-- [ ] Add path-safe filesystem helpers beyond the current CLI parser checks.
-- [ ] Define shared TS types for runs, sessions, messages, goals, plans, findings, and reports.
-- [ ] Create JSON serialization helpers for machine-readable runtime mode.
+- [x] Add path-safe filesystem helpers beyond the current CLI parser checks.
+- [x] Define shared TS types for runs, sessions, messages, goals, plans, findings, and reports.
+- [x] Create JSON serialization helpers for machine-readable runtime mode.
+
+Notes:
+
+- Phase 2 standardizes on the Node.js standard library plus the existing TypeScript/Vitest toolchain for prompts, validation, env access, and process execution. No extra runtime dependency is required yet; backend/session-specific libraries remain Phase 6 work if the stdlib stops being sufficient.
 
 Exit criteria:
 
-- [ ] Strict type-safe primitives exist for core runtime models.
-- [ ] The repo can support multiple subsystems without ad hoc local types.
+- [x] Strict type-safe primitives exist for core runtime models.
+- [x] The repo can support multiple subsystems without ad hoc local types.
 
 ## Phase 3: CLI Shell Parity
 
