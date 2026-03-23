@@ -1,0 +1,24 @@
+{
+  "name": "kodo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "kodo": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "vite build && chmod +x dist/cli.js",
+    "dev": "vite-node src/cli.ts",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5",
+    "vite-node": "^3.2.4"
+  }
+}
