@@ -129,11 +129,11 @@ The table below now includes every Python `test_*.py` file from the March 22, 20
 | `tests/cli/test_json_mode.py` | `test/cli/json-mode.test.ts` | pending | port-direct |
 | `tests/cli/test_noninteractive.py` | `test/cli/noninteractive.test.ts` | pending | port-direct |
 | `tests/cli/test_params.py` | `test/cli/params.test.ts` | pending | port-direct |
-| `tests/cli/test_subcommands.py` | `test/cli/subcommands.test.ts` | pending | port-direct |
+| `tests/cli/test_subcommands.py` | `test/cli/subcommands.test.ts` | started | port-direct |
 | `tests/config/test_factory.py` | `test/config/factory.test.ts` | pending | rewrite-equivalent |
 | `tests/config/test_factory_adversarial.py` | `test/config/factory-adversarial.test.ts` | pending | rewrite-equivalent |
 | `tests/config/test_factory_backends.py` | `test/config/factory-backends.test.ts` | pending | rewrite-equivalent |
-| `tests/config/test_team_config.py` | `test/config/team-config.test.ts` | pending | rewrite-equivalent |
+| `tests/config/test_team_config.py` | `test/config/team-config.test.ts` | started | rewrite-equivalent |
 | `tests/test_list_runs.py` | `test/logging/list-runs.test.ts` | pending | rewrite-equivalent |
 | `tests/test_log.py` | `test/logging/log.test.ts` | pending | rewrite-equivalent |
 | `tests/test_resume.py` | `test/logging/resume.test.ts` | pending | rewrite-equivalent |

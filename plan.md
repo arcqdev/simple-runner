@@ -165,7 +165,7 @@ Concrete tasks:
   - [x] `team` / `teams`
   - [x] `backend` / `backends`
   - [x] `issue` / `issues`
-- [ ] Implement functional `teams add`, `teams edit`, and `teams auto`.
+- [x] Implement functional `teams add`, `teams edit`, and `teams auto`.
 - [x] Implement initial non-interactive flags and validation rules.
 - [ ] Port prompt/confirmation behavior and printed summaries fully.
 - [x] Preserve exit-code behavior for current validation failures and JSON error formatting.

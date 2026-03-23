@@ -1,6 +1,21 @@
+import os from "node:os";
+
+import {
+  AGENT_DEFAULTS,
+  describeTeamStatus,
+  generateAutoTeam,
+  getTeamByName,
+  listAvailableTeams,
+  saveTeamConfig,
+  teamsDir,
+  type TeamAgentConfig,
+  type TeamBackend,
+  type TeamConfig,
+} from "../config/team-config.js";
 import { CliError } from "../core/errors.js";
+import { getPromptAdapter } from "./prompts.js";
 import type { TopLevelSubcommand } from "./types.js";
-import { printLines } from "./ui.js";
+import { printLines, writeStderr } from "./ui.js";
 
 const TEAM_HELP = [
   "Usage: kodo teams [add <name> | edit <name> | auto [mode]]",
@@ -17,6 +32,372 @@ function placeholderSummary(command: string, detail: string, args: string[]): vo
     lines.push(`Args: ${args.join(" ")}`);
   }
   printLines(lines);
+}
+
+function printTeamHelp(): void {
+  printLines(TEAM_HELP);
+}
+
+function listTeams(homeDir = os.homedir()): void {
+  const teams = listAvailableTeams(homeDir);
+  if (teams.length === 0) {
+    printLines(["No teams found."]);
+    return;
+  }
+
+  let hasMissing = false;
+  for (const team of teams) {
+    printLines([team.name]);
+    if (team.config.description) {
+      printLines([`  ${team.config.description}`]);
+    }
+    if (team.source !== "built-in") {
+      printLines([`  ${team.path}`]);
+    }
+    const status = describeTeamStatus(team.config);
+    hasMissing ||= status.hasMissing;
+    printLines(status.lines);
+    printLines([""]);
+  }
+
+  if (hasMissing) {
+    printLines(["Hint: Run 'kodo teams auto' to generate teams adapted to your installed backends.", ""]);
+  }
+}
+
+function selectBackend(defaultValue?: TeamBackend): TeamBackend | null {
+  const prompt = getPromptAdapter();
+  const choices: TeamBackend[] = ["claude", "claude-cli", "cursor", "codex", "gemini-cli"];
+  const value = prompt.select("Backend", choices, defaultValue ?? choices[0]);
+  if (value === null) {
+    return null;
+  }
+  if (!choices.includes(value as TeamBackend)) {
+    throw new CliError(`Unknown backend: ${value}`);
+  }
+  return value as TeamBackend;
+}
+
+function promptInteger(message: string, defaultValue: number | undefined): number | null {
+  const prompt = getPromptAdapter();
+  const raw = prompt.text(message, defaultValue === undefined ? "" : String(defaultValue));
+  if (raw === null) {
+    return null;
+  }
+  if (raw.trim() === "") {
+    return defaultValue ?? null;
+  }
+  if (!/^-?\d+$/.test(raw.trim())) {
+    throw new CliError(`${message} must be an integer.`);
+  }
+  return Number.parseInt(raw.trim(), 10);
+}
+
+function promptAgentFields(defaults?: TeamAgentConfig): TeamAgentConfig | null {
+  const prompt = getPromptAdapter();
+  const backend = selectBackend(defaults?.backend);
+  if (backend === null) {
+    return null;
+  }
+
+  const modelSuggestions: Record<TeamBackend, string[]> = {
+    claude: ["sonnet", "opus"],
+    "claude-cli": ["sonnet", "opus"],
+    codex: ["gpt-5.4", "gpt-5.3-codex", "o3"],
+    cursor: ["composer-1.5"],
+    "gemini-cli": ["gemini-2.5-flash", "gemini-3-flash", "gemini-3-pro"],
+  };
+
+  const modelChoice = prompt.select("Model", [...modelSuggestions[backend], "(custom)"], defaults?.model);
+  if (modelChoice === null) {
+    return null;
+  }
+  const model =
+    modelChoice === "(custom)"
+      ? prompt.text("Model name", defaults?.model ?? "")
+      : modelChoice;
+  if (model === null) {
+    return null;
+  }
+
+  const description = prompt.text("Description", defaults?.description ?? AGENT_DEFAULTS.description);
+  if (description === null) {
+    return null;
+  }
+  const systemPrompt = prompt.text("System prompt (empty to skip)", defaults?.system_prompt ?? "");
+  if (systemPrompt === null) {
+    return null;
+  }
+  const maxTurns = promptInteger("Max turns", defaults?.max_turns ?? AGENT_DEFAULTS.max_turns);
+  if (maxTurns === null) {
+    return null;
+  }
+  const timeout = prompt.text(
+    "Timeout in seconds (empty for none)",
+    defaults?.timeout_s === undefined ? "" : String(defaults.timeout_s),
+  );
+  if (timeout === null) {
+    return null;
+  }
+
+  const result: TeamAgentConfig = {
+    backend,
+    model: model.trim(),
+    description,
+    max_turns: maxTurns,
+  };
+
+  if (systemPrompt.trim()) {
+    result.system_prompt = systemPrompt;
+  }
+  if (timeout.trim()) {
+    if (!/^-?\d+$/.test(timeout.trim())) {
+      throw new CliError("Timeout in seconds must be an integer.");
+    }
+    result.timeout_s = Number.parseInt(timeout.trim(), 10);
+  }
+  if (backend === "claude" || backend === "claude-cli") {
+    const fallback = prompt.text("Fallback model (empty to skip)", defaults?.fallback_model ?? "");
+    if (fallback === null) {
+      return null;
+    }
+    if (fallback.trim()) {
+      result.fallback_model = fallback.trim();
+    }
+  }
+
+  const chrome = prompt.confirm("Enable Chrome/browser access?", defaults?.chrome ?? false);
+  if (chrome === null) {
+    return null;
+  }
+  if (chrome) {
+    result.chrome = true;
+  }
+
+  return result;
+}
+
+function ensureAtLeastOneAgent(agents: Record<string, TeamAgentConfig>): void {
+  if (Object.keys(agents).length === 0) {
+    throw new CliError("A team needs at least one agent.");
+  }
+}
+
+function promptVerifiers(agentKeys: string[], defaults?: Record<string, string[]>): Record<string, string[]> | null {
+  const prompt = getPromptAdapter();
+  if (agentKeys.length <= 1) {
+    return {
+      testers: [],
+      browser_testers: [],
+      reviewers: [],
+    };
+  }
+
+  const testers = prompt.multiselect("Select testers (non-browser)", agentKeys, defaults?.testers ?? []);
+  if (testers === null) {
+    return null;
+  }
+  const browserTesters = prompt.multiselect("Select browser testers", agentKeys, defaults?.browser_testers ?? []);
+  if (browserTesters === null) {
+    return null;
+  }
+  const reviewers = prompt.multiselect("Select reviewers (architects)", agentKeys, defaults?.reviewers ?? []);
+  if (reviewers === null) {
+    return null;
+  }
+
+  return {
+    testers,
+    browser_testers: browserTesters,
+    reviewers,
+  };
+}
+
+function addTeam(name: string, homeDir = os.homedir()): void {
+  const existing = getTeamByName(name, homeDir);
+  if (existing?.source === "user") {
+    throw new CliError(`Team '${name}' already exists at ${existing.path}\nUse 'kodo teams edit ${name}' to modify it.`);
+  }
+
+  const prompt = getPromptAdapter();
+  printLines([`Creating team: ${name}`, ""]);
+  const description = prompt.text("Team description", "") ?? (() => { throw new CliError("Cancelled."); })();
+  const orchestratorPrompt = prompt.text("Orchestrator prompt (empty for default)", "") ?? (() => { throw new CliError("Cancelled."); })();
+
+  const agents: Record<string, TeamAgentConfig> = {};
+  while (true) {
+    printLines([`--- Add agent (${Object.keys(agents).length} so far) ---`]);
+    const agentKey = prompt.text("Agent key name (empty to finish)", "");
+    if (agentKey === null) {
+      throw new CliError("Cancelled.");
+    }
+    if (agentKey.trim() === "") {
+      if (Object.keys(agents).length === 0) {
+        writeStderr("A team needs at least one agent.\n");
+        continue;
+      }
+      break;
+    }
+    if (agentKey.trim() in agents) {
+      writeStderr(`Agent '${agentKey.trim()}' already exists.\n`);
+      continue;
+    }
+    const agent = promptAgentFields();
+    if (agent === null) {
+      throw new CliError("Cancelled.");
+    }
+    agents[agentKey.trim()] = agent;
+  }
+
+  const verifiers = promptVerifiers(Object.keys(agents));
+  if (verifiers === null) {
+    throw new CliError("Cancelled.");
+  }
+
+  const config: TeamConfig = {
+    name,
+    description,
+    verifiers,
+    agents,
+  };
+  if (orchestratorPrompt.trim()) {
+    config.orchestrator_prompt = orchestratorPrompt;
+  }
+
+  const savedPath = saveTeamConfig(name, config, homeDir);
+  printLines([`Saved to ${savedPath}`]);
+}
+
+function editTeam(name: string, homeDir = os.homedir()): void {
+  const team = getTeamByName(name, homeDir);
+  if (team === null) {
+    const available = listAvailableTeams(homeDir).map((item) => `  ${item.name} (${item.source})`).join("\n");
+    throw new CliError(`Team '${name}' not found.\nAvailable teams:\n${available}`);
+  }
+
+  if (team.source === "built-in") {
+    printLines([`Copying built-in team '${name}' to user directory for editing.`]);
+  }
+
+  const prompt = getPromptAdapter();
+  const config: TeamConfig = JSON.parse(JSON.stringify(team.config)) as TeamConfig;
+  const agents = config.agents;
+  let verifiers = config.verifiers ?? { testers: [], browser_testers: [], reviewers: [] };
+
+  while (true) {
+    printLines([
+      "",
+      `Team: ${name}`,
+      `  Description: ${config.description ?? ""}`,
+      `  Orchestrator prompt: ${config.orchestrator_prompt ? `${config.orchestrator_prompt.slice(0, 80)}...` : "(default)"}`,
+      `  Agents (${Object.keys(agents).length}):`,
+      ...Object.entries(agents).map(([agentKey, agent]) => `    ${agentKey}: ${agent.backend} / ${agent.model ?? "?"}`),
+      "",
+    ]);
+
+    const action = prompt.select("Action", ["Add agent", "Edit agent", "Remove agent", "Edit team settings", "Edit verifiers", "Save & exit"], "Save & exit");
+    if (action === null) {
+      throw new CliError("Cancelled.");
+    }
+
+    if (action === "Add agent") {
+      const agentKey = prompt.text("Agent key name", "");
+      if (agentKey === null) {
+        throw new CliError("Cancelled.");
+      }
+      if (!agentKey.trim()) {
+        continue;
+      }
+      if (agentKey.trim() in agents) {
+        writeStderr(`Agent '${agentKey.trim()}' already exists.\n`);
+        continue;
+      }
+      const agent = promptAgentFields();
+      if (agent === null) {
+        throw new CliError("Cancelled.");
+      }
+      agents[agentKey.trim()] = agent;
+    } else if (action === "Edit agent") {
+      ensureAtLeastOneAgent(agents);
+      const agentKey = prompt.select("Which agent?", Object.keys(agents), Object.keys(agents)[0]);
+      if (agentKey === null) {
+        throw new CliError("Cancelled.");
+      }
+      if (!(agentKey in agents)) {
+        throw new CliError(`Unknown agent: ${agentKey}`);
+      }
+      const edited = promptAgentFields(agents[agentKey]);
+      if (edited === null) {
+        throw new CliError("Cancelled.");
+      }
+      agents[agentKey] = edited;
+    } else if (action === "Remove agent") {
+      ensureAtLeastOneAgent(agents);
+      const agentKey = prompt.select("Remove which agent?", Object.keys(agents), Object.keys(agents)[0]);
+      if (agentKey === null) {
+        throw new CliError("Cancelled.");
+      }
+      delete agents[agentKey];
+      if (Object.keys(agents).length === 0) {
+        writeStderr("A team needs at least one agent.\n");
+      }
+    } else if (action === "Edit team settings") {
+      const description = prompt.text("Team description", config.description ?? "");
+      if (description === null) {
+        throw new CliError("Cancelled.");
+      }
+      const orchestratorPrompt = prompt.text("Orchestrator prompt (empty for default)", config.orchestrator_prompt ?? "");
+      if (orchestratorPrompt === null) {
+        throw new CliError("Cancelled.");
+      }
+      config.description = description;
+      if (orchestratorPrompt.trim()) {
+        config.orchestrator_prompt = orchestratorPrompt;
+      } else {
+        delete config.orchestrator_prompt;
+      }
+    } else if (action === "Edit verifiers") {
+      const nextVerifiers = promptVerifiers(Object.keys(agents), verifiers);
+      if (nextVerifiers === null) {
+        throw new CliError("Cancelled.");
+      }
+      verifiers = nextVerifiers;
+    } else if (action === "Save & exit") {
+      ensureAtLeastOneAgent(agents);
+      config.verifiers = Object.fromEntries(
+        Object.entries(verifiers).map(([role, keys]) => [role, keys.filter((key) => key in agents)]),
+      );
+      const savedPath = saveTeamConfig(name, config, homeDir);
+      printLines([`Saved to ${savedPath}`]);
+      return;
+    }
+  }
+}
+
+function autoTeam(modeName: string, homeDir = os.homedir()): void {
+  const { config, skipped } = generateAutoTeam(modeName, homeDir);
+
+  printLines([`Generated team '${modeName}' for your setup:`, ""]);
+  for (const [agentKey, agentConfig] of Object.entries(config.agents)) {
+    printLines([`  ${agentKey.padEnd(20)}  ${agentConfig.backend.padEnd(12)}  ${agentConfig.model ?? ""}`]);
+  }
+  if (skipped.length > 0) {
+    printLines(["", `  Skipped (backend missing): ${skipped.map((item) => `${item.agent} (${item.backend})`).join(", ")}`]);
+  }
+  printLines([""]);
+
+  const destination = `${teamsDir(homeDir)}/${modeName}.json`;
+  const existing = getTeamByName(modeName, homeDir);
+  if (existing?.source === "user") {
+    const confirmed = getPromptAdapter().confirm(`Team '${modeName}' already exists at ${destination}. Overwrite?`, false);
+    if (!confirmed) {
+      writeStderr("Cancelled.\n");
+      return;
+    }
+  }
+
+  saveTeamConfig(modeName, config, homeDir);
+  printLines([`Saved to ${destination}`, "", `Use with: kodo --team ${modeName}`]);
 }
 
 export function handleSubcommand(command: TopLevelSubcommand, args: string[]): number {
@@ -45,7 +426,11 @@ export function handleSubcommand(command: TopLevelSubcommand, args: string[]): n
     case "team":
     case "teams": {
       if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
-        printLines(TEAM_HELP);
+        if (args.length === 0) {
+          listTeams();
+        } else {
+          printTeamHelp();
+        }
         return 0;
       }
 
@@ -59,11 +444,26 @@ export function handleSubcommand(command: TopLevelSubcommand, args: string[]): n
         );
       }
 
-      placeholderSummary(
-        `teams ${args.join(" ")}`,
-        "Team management is not implemented yet in the TypeScript port.",
-        args,
-      );
+      if (subcommand === "add") {
+        addTeam(maybeName);
+        return 0;
+      }
+      if (subcommand === "edit") {
+        editTeam(maybeName);
+        return 0;
+      }
+      if (subcommand === "auto") {
+        if (maybeName) {
+          autoTeam(maybeName);
+          return 0;
+        }
+        for (const team of listAvailableTeams().filter((entry) => entry.source === "built-in")) {
+          autoTeam(team.name);
+          printLines([""]);
+        }
+        return 0;
+      }
+
       return 0;
     }
   }

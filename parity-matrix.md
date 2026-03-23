@@ -27,7 +27,7 @@ Legend:
 | `logs` subcommand | `kodo/cli/_subcommands.py`, `viewer.py` | pending-runtime | Routed, but viewer server is pending |
 | `issue` subcommand | `kodo/cli/_subcommands.py` | pending-runtime | Routed, but archive/browser flow is pending |
 | `backends` subcommand | `kodo/cli/_subcommands.py` | pending-runtime | Routed, but backend probing is pending |
-| `teams` subcommand family | `kodo/cli/_subcommands.py`, `team_config.py` | matched-shell | Usage/help and dispatch shell exist; persistence and prompts are pending |
+| `teams` subcommand family | `kodo/cli/_subcommands.py`, `team_config.py` | pending-runtime | TS now ships built-in/user team discovery plus functional `teams`, `teams add`, `teams edit`, and `teams auto`; prompt UX and backend parity details still differ from Python |
 | `update` subcommand | `kodo/cli/_subcommands.py` | pending-runtime | Routed, but updater behavior is pending |
 | Viewer standalone behavior | `kodo/viewer.py` | pending | No TS implementation yet |
 | Run artifacts and JSON output shapes | `log.py`, `_launch.py`, orchestrators | pending | Not started |
@@ -40,3 +40,4 @@ Current cut:
 - Phase 0 deliverables are now represented by checked-in matrices and source-tree shape.
 - Phase 1 is started with mirrored `test/` directories and initial CLI parity tests.
 - Phase 3 is started with a real TypeScript CLI shell replacing the placeholder command handler.
+- The `teams` surface has moved beyond shell-only routing: TS now persists user team JSON, lists built-ins plus overrides, and can auto-adapt templates to installed backends.
