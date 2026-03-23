@@ -6,6 +6,7 @@ import { emit as emitLogEvent } from "../logging/log.js";
 import type { JsonObject } from "./json.js";
 
 export type SessionBackend = "claude-cli" | "codex" | "cursor" | "gemini-cli";
+export type TeamSessionBackend = "claude" | "claude-cli" | "codex" | "cursor" | "gemini-cli";
 
 export type SessionQueryResult = {
   elapsedS: number;
@@ -751,6 +752,22 @@ export function backendForOrchestrator(orchestrator: string): SessionBackend | n
   }
 }
 
+export function backendForTeamAgent(backend: TeamSessionBackend): SessionBackend | null {
+  switch (backend) {
+    case "claude":
+    case "claude-cli":
+      return "claude-cli";
+    case "codex":
+      return "codex";
+    case "cursor":
+      return "cursor";
+    case "gemini-cli":
+      return "gemini-cli";
+    default:
+      return null;
+  }
+}
+
 export function createSessionForOrchestrator(
   orchestrator: string,
   model: string,
@@ -758,4 +775,13 @@ export function createSessionForOrchestrator(
 ): Session | null {
   const backend = backendForOrchestrator(orchestrator);
   return backend === null ? null : new SubprocessSession(backend, model, options);
+}
+
+export function createSessionForTeamAgent(
+  backend: TeamSessionBackend,
+  model: string,
+  options: SessionOptions = {},
+): Session | null {
+  const sessionBackend = backendForTeamAgent(backend);
+  return sessionBackend === null ? null : new SubprocessSession(sessionBackend, model, options);
 }

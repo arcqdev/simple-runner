@@ -44,7 +44,7 @@ const resumeIndex = args.indexOf("resume");
 const resumed = resumeIndex !== -1 ? args[resumeIndex + 1] : null;
 console.log(JSON.stringify({ type: "thread.started", thread_id: resumed ?? "thread-1" }));
 console.log(JSON.stringify({ type: "token_count", input_tokens: 7, output_tokens: 11 }));
-console.log(JSON.stringify({ type: "agent_message", message: resumed ? "Resumed " + resumed : "Completed task" }));
+console.log(JSON.stringify({ type: "agent_message", message: resumed ? "GOAL_DONE: Resumed " + resumed : "GOAL_DONE: Completed task" }));
 `;
   writeExecutable(path.join(binDir, "codex"), script);
 }
@@ -131,6 +131,17 @@ describe("runtime integration", () => {
     process.env.KODO_ENABLE_SESSION_RUNTIME = "1";
 
     const projectDir = makeTempDir("kodo-project");
+    mkdirSync(path.join(projectDir, ".kodo"), { recursive: true });
+    writeFileSync(
+      path.join(projectDir, ".kodo", "team.json"),
+      `${JSON.stringify({
+        agents: {
+          worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        },
+        verifiers: { testers: [], browser_testers: [], reviewers: [] },
+      }, null, 2)}\n`,
+      "utf8",
+    );
     const io = captureOutput();
 
     expect(

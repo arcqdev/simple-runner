@@ -8,7 +8,8 @@ import { getRunById } from "../logging/runs.js";
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
 import { availableBackends, preflightWarningsForBackends } from "./backends.js";
-import { backendForOrchestrator, createSessionForOrchestrator } from "./sessions.js";
+import { runOrchestration } from "./orchestration.js";
+import { backendForOrchestrator } from "./sessions.js";
 import type { ExecutionResult } from "./types.js";
 
 type ResumeTarget = {
@@ -79,7 +80,7 @@ function buildGenericSummary(goal: string, params: ResolvedRuntimeParams): strin
   return `Completed 1 cycle with ${params.orchestrator} (${params.orchestratorModel}) for goal: ${goal.replace(/\s+/gu, " ").trim()}`;
 }
 
-function buildArtifacts(
+function writeSyntheticArtifacts(
   runDir: RunDir,
   goal: ResolvedGoal,
   flags: MainFlags,
@@ -142,7 +143,7 @@ function syntheticExecutionResult(
   flags: MainFlags,
   warning: string | null,
 ): ExecutionResult {
-  const artifacts = buildArtifacts(runDir, goal, flags);
+  const artifacts = writeSyntheticArtifacts(runDir, goal, flags);
   const summary = buildGenericSummary(goal.goalText ?? "", params);
 
   if (warning !== null) {
@@ -225,7 +226,6 @@ export function executePendingRun(
   goal: ResolvedGoal,
   flags: MainFlags,
 ): ExecutionResult {
-  const artifacts = buildArtifacts(runDir, goal, flags);
   const backendWarnings = preflightWarningsForBackends(configuredBackends(params, flags.project));
 
   emitLogEvent("preflight_start", {
@@ -262,107 +262,19 @@ export function executePendingRun(
     return syntheticExecutionResult(runDir, params, goal, flags, reason);
   }
 
-  const session = createSessionForOrchestrator(params.orchestrator, params.orchestratorModel, {
-    resumeSessionId: loadResumeSessionId(runDir),
-  });
-
-  if (session === null) {
-    return syntheticExecutionResult(
-      runDir,
-      params,
-      goal,
-      flags,
-      `Unable to create session for orchestrator ${params.orchestrator}`,
-    );
-  }
-
-  try {
-    emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
-    emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
-    emitLogEvent("parallel_group_start", {
-      group: "implementation",
-      agents: [params.orchestrator],
-    });
-    emitLogEvent("cycle_start", {
-      cycle_index: 1,
-      orchestrator: params.orchestrator,
-      project_dir: flags.project,
-    });
-    emitLogEvent("agent_run_start", {
-      agent: "orchestrator",
-      model: params.orchestratorModel,
-      session: params.orchestrator,
-    });
-    emitLogEvent("orchestrator_tool_call", {
-      agent: "orchestrator",
-      cycle_index: 1,
-      tool: "implement_goal",
-    });
-
-    const response = session.query(goal.goalText ?? "", {
-      maxTurns: params.maxExchanges,
-      projectDir: flags.project,
-    });
-
-    const summary = buildRuntimeSummary(params, goal.goalText ?? "", response.text);
-
-    emitLogEvent("agent_run_end", {
-      agent: "orchestrator",
-      status: response.isError ? "failed" : "completed",
-    });
-    emitLogEvent("orchestrator_tool_result", {
-      agent: "orchestrator",
-      cycle_index: 1,
-      tool: "implement_goal",
-      ok: !response.isError,
-    });
-    emitLogEvent("parallel_group_end", {
-      group: "implementation",
-      finished: !response.isError,
-    });
-    emitLogEvent("cycle_end", {
-      cycle_index: 1,
-      exchanges: 1,
-      finished: !response.isError,
-      summary,
-    });
-    emitLogEvent(params.autoCommit ? "auto_commit_done" : "auto_commit_disabled", {
-      enabled: params.autoCommit,
-    });
-    emitLogEvent("persist_run_state", {
-      config_file: runDir.configFile,
-      goal_file: runDir.goalFile,
-      run_dir: runDir.root,
-    });
-    if (!response.isError) {
-      emitLogEvent("run_end", {
-        finished: true,
-        orchestrator: params.orchestrator,
-        summary,
-        total_cycles: 1,
-        total_exchanges: 1,
-      });
-    }
-
-    return {
-      artifacts,
-      cyclesCompleted: 1,
-      finished: !response.isError,
-      message: response.isError ? "Run failed." : "Run completed.",
-      runId: runDir.runId,
-      runRoot: runDir.root,
-      summary,
-    };
-  } finally {
-    try {
-      session.close();
-    } catch (error) {
-      emitLogEvent("session_cleanup_warning", {
-        session: session.backend,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  const runtime = runOrchestration(runDir, params, goal, flags);
+  return {
+    artifacts: runtime.artifacts,
+    cyclesCompleted: runtime.cyclesCompleted,
+    finished: runtime.finished,
+    message: runtime.message,
+    runId: runDir.runId,
+    runRoot: runDir.root,
+    summary:
+      runtime.summary.length > 0
+        ? runtime.summary
+        : buildRuntimeSummary(params, goal.goalText ?? "", runtime.message),
+  };
 }
 
 function loadGoalText(runDir: RunDir): string {
@@ -410,21 +322,6 @@ function loadRuntimeParams(runDir: RunDir): ResolvedRuntimeParams {
     params.effort = parsed.effort;
   }
   return params;
-}
-
-function loadResumeSessionId(runDir: RunDir): string | null {
-  if (!existsSync(runDir.configFile)) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(readFileSync(runDir.configFile, "utf8")) as Record<string, unknown>;
-    return typeof parsed.resumeSessionId === "string" && parsed.resumeSessionId.length > 0
-      ? parsed.resumeSessionId
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function fallbackRuntimeParams(run: ReturnType<typeof getRunById>): ResolvedRuntimeParams {
@@ -491,17 +388,6 @@ export function resumeRun(target: ResumeTarget): ExecutionResult {
     version: false,
     yes: true,
   };
-
-  const resumeSessionId =
-    state.agentSessionIds.orchestrator ??
-    state.agentSessionIds[params.orchestrator] ??
-    state.agentSessionIds[backendForOrchestrator(params.orchestrator) ?? ""];
-
-  if (resumeSessionId !== undefined && existsSync(runDir.configFile)) {
-    const config = JSON.parse(readFileSync(runDir.configFile, "utf8")) as Record<string, unknown>;
-    config.resumeSessionId = resumeSessionId;
-    writeFileSync(runDir.configFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-  }
 
   return executePendingRun(
     runDir,
