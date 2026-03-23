@@ -164,6 +164,7 @@ describe("runCli subcommands", () => {
     const io = captureOutput();
 
     expect(runCli(["logs"])).toBe(0);
+    expect(io.stdout()).toContain("Log viewer: file://");
     expect(io.stdout()).toContain("Log file:");
     expect(io.stdout()).toContain("20260322_120000/log.jsonl");
     io.restore();
@@ -179,8 +180,18 @@ describe("runCli subcommands", () => {
     const io = captureOutput();
 
     expect(runCli(["backends"])).toBe(0);
-    expect(io.stdout()).toContain("Available backends:");
-    expect(io.stdout()).toContain("codex        installed");
+    expect(io.stdout()).toContain("CLI backends (agents):");
+    expect(io.stdout()).toContain("codex");
+    expect(io.stdout()).toContain("API keys:");
+    io.restore();
+  });
+
+  it("fails update when uv is unavailable", () => {
+    vi.stubEnv("PATH", "");
+    const io = captureOutput();
+
+    expect(runCli(["update"])).toBe(1);
+    expect(io.stderr()).toContain("uv is required for updating");
     io.restore();
   });
 
@@ -194,6 +205,7 @@ describe("runCli subcommands", () => {
 
     expect(runCli(["issue", "--project", project, "--no-open"])).toBe(0);
     expect(io.stdout()).toContain("Issue URL:");
+    expect(io.stdout()).toContain("Run archive:");
     expect(io.stdout()).toContain("Bug%20report%3A%20run%2020260322_120000");
     io.restore();
   });

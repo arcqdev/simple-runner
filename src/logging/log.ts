@@ -1,26 +1,64 @@
 import { existsSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { parseRun } from "./runs.js";
 
 export class RunDir {
+  readonly projectDir: string;
+  readonly runId: string;
   readonly root: string;
   readonly logFile: string;
+  readonly goalFile: string;
+  readonly goalRefinedFile: string;
+  readonly goalPlanFile: string;
+  readonly configFile: string;
+  readonly teamFile: string;
 
-  private constructor(root: string) {
+  private constructor(projectDir: string, runId: string, root: string) {
+    this.projectDir = projectDir;
+    this.runId = runId;
     this.root = root;
     this.logFile = path.join(root, "log.jsonl");
+    this.goalFile = path.join(root, "goal.md");
+    this.goalRefinedFile = path.join(root, "goal-refined.md");
+    this.goalPlanFile = path.join(root, "goal-plan.json");
+    this.configFile = path.join(root, "config.json");
+    this.teamFile = path.join(root, "team.json");
   }
 
-  static create(parentDir: string, runId: string): RunDir {
-    const root = path.join(parentDir, runId);
+  static create(projectDir: string, runId = timestampRunId()): RunDir {
+    const root = path.join(runsRoot(), runId);
     mkdirSync(root, { recursive: true });
-    return new RunDir(root);
+    return new RunDir(projectDir, runId, root);
+  }
+
+  static fromLogFile(logFile: string, projectDir: string): RunDir {
+    const runId = path.basename(path.dirname(logFile));
+    const root = path.dirname(logFile);
+    return new RunDir(projectDir, runId, root);
   }
 }
 
 let activeLogFile: string | null = null;
 let startTime = 0;
+
+function runsRoot(homeDir = os.homedir()): string {
+  const override = process.env.KODO_RUNS_DIR;
+  const root = override ? path.resolve(override) : path.join(homeDir, ".kodo", "runs");
+  mkdirSync(root, { recursive: true });
+  return root;
+}
+
+function timestampRunId(now = new Date()): string {
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const hour = String(now.getUTCHours()).padStart(2, "0");
+  const minute = String(now.getUTCMinutes()).padStart(2, "0");
+  const second = String(now.getUTCSeconds()).padStart(2, "0");
+  return `${year}${month}${day}_${hour}${minute}${second}`;
+}
 
 function serialize(value: unknown): unknown {
   if (value === null || value === undefined) {

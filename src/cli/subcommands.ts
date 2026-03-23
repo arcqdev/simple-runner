@@ -1,5 +1,7 @@
-import os from "node:os";
+import { existsSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { spawnSync } from "node:child_process";
 
 import {
   AGENT_DEFAULTS,
@@ -14,8 +16,11 @@ import {
   type TeamConfig,
 } from "../config/team-config.js";
 import { CliError } from "../core/errors.js";
+import { packRunArchive } from "../logging/archive.js";
 import { availableBackends } from "../runtime/backends.js";
 import { getRunById, listRuns, truncateWord, type RunState } from "../logging/runs.js";
+import { VERSION } from "../core/version.js";
+import { openViewer } from "../viewer.js";
 import { getPromptAdapter } from "./prompts.js";
 import type { TopLevelSubcommand } from "./types.js";
 import { printLines, writeStderr } from "./ui.js";
@@ -29,12 +34,37 @@ const TEAM_HELP = [
   "  auto        Generate teams adapted to installed backends",
 ];
 
-function placeholderSummary(command: string, detail: string, args: string[]): void {
-  const lines = [`${detail}`, "", `Command: ${command}`];
-  if (args.length > 0) {
-    lines.push(`Args: ${args.join(" ")}`);
+function commandOnPath(command: string): boolean {
+  const pathValue = process.env.PATH ?? "";
+  for (const directory of pathValue.split(path.delimiter)) {
+    if (!directory) {
+      continue;
+    }
+    const candidate = path.join(directory, command);
+    if (existsSync(candidate)) {
+      return true;
+    }
   }
-  printLines(lines);
+  return false;
+}
+
+function commandVersion(command: string, versionArgs = ["--version"]): string | null {
+  const result = spawnSync(command, versionArgs, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error || result.status !== 0) {
+    return null;
+  }
+  const line = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0);
+  return line ?? null;
+}
+
+function maskSecret(secret: string): string {
+  return secret.length > 12 ? `${secret.slice(0, 4)}...${secret.slice(-4)}` : "***";
 }
 
 function printTeamHelp(): void {
@@ -537,15 +567,17 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
     return;
   }
 
+  const openBrowser = !process.env.KODO_NO_VIEWER;
   if (parsed.logfile !== null) {
     const resolved = path.resolve(parsed.logfile);
     if (!resolved.endsWith(".jsonl")) {
       throw new CliError(`Expected a .jsonl log file: ${resolved}`);
     }
+    const viewerUrl = openViewer(resolved, { openBrowser });
     printLines([
-      `Viewer support is not implemented yet in the TypeScript port.`,
+      `Log viewer: ${viewerUrl}`,
       `Log file: ${resolved}`,
-      `Requested port: ${parsed.port}`,
+      ...(parsed.port === 8080 ? [] : [`Requested port: ${parsed.port} (file viewer opened; HTTP serving is not wired yet)`]),
     ]);
     return;
   }
@@ -560,17 +592,77 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
     throw new CliError("Cancelled.");
   }
 
+  const viewerUrl = openViewer(selected.logFile, { openBrowser });
   printLines([
-    `Viewer support is not implemented yet in the TypeScript port.`,
+    `Log viewer: ${viewerUrl}`,
     `Log file: ${selected.logFile}`,
-    `Requested port: ${parsed.port}`,
+    ...(parsed.port === 8080 ? [] : [`Requested port: ${parsed.port} (file viewer opened; HTTP serving is not wired yet)`]),
   ]);
 }
 
 function listBackendsSubcommand(): void {
   const backends = availableBackends();
-  const lines = Object.entries(backends).map(([name, installed]) => `  ${name.padEnd(12)} ${installed ? "installed" : "missing"}`);
-  printLines(["Available backends:", ...lines]);
+  const installLinks: Record<string, string> = {
+    claude: "https://docs.anthropic.com/en/docs/claude-code",
+    codex: "https://github.com/openai/codex",
+    cursor: "https://docs.cursor.com/agent",
+    "gemini-cli": "https://github.com/google-gemini/gemini-cli",
+    kimi: "https://platform.moonshot.cn",
+  };
+  const apiProviders = [
+    { name: "Anthropic", envVars: ["ANTHROPIC_API_KEY"] },
+    { name: "OpenAI", envVars: ["OPENAI_API_KEY"] },
+    { name: "Google Gemini", envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] },
+    { name: "DeepSeek", envVars: ["DEEPSEEK_API_KEY"] },
+    { name: "Groq", envVars: ["GROQ_API_KEY"] },
+    { name: "OpenRouter", envVars: ["OPENROUTER_API_KEY"] },
+    { name: "Mistral", envVars: ["MISTRAL_API_KEY"] },
+    { name: "xAI", envVars: ["XAI_API_KEY"] },
+  ];
+  const lines = ["CLI backends (agents):"];
+
+  for (const [name, installed] of Object.entries(backends)) {
+    if (!installed) {
+      lines.push(`  ${name.padEnd(12)} not found  ${installLinks[name] ?? ""}`.trimEnd());
+      continue;
+    }
+    const executable =
+      name === "cursor" ? "cursor-agent"
+      : name === "gemini-cli" ? "gemini"
+      : name;
+    const version = commandVersion(executable) ?? "installed";
+    lines.push(`  ${name.padEnd(12)} ${version}`);
+  }
+
+  lines.push("", "API keys:");
+  for (const provider of apiProviders) {
+    const hit = provider.envVars.find((name) => {
+      const value = process.env[name];
+      return typeof value === "string" && value.trim().length > 0;
+    });
+    if (hit === undefined) {
+      lines.push(`  ${provider.name.padEnd(22)} not set  (${provider.envVars.join(", ")})`);
+      continue;
+    }
+    lines.push(`  ${provider.name.padEnd(22)} set via ${hit} (${maskSecret(process.env[hit] ?? "")})`);
+  }
+
+  printLines(lines);
+}
+
+function updateSubcommand(): number {
+  if (!commandOnPath("uv")) {
+    throw new CliError("uv is required for updating. Install it: https://docs.astral.sh/uv/");
+  }
+
+  printLines(["Updating kodo..."]);
+  const result = spawnSync("uv", ["tool", "upgrade", "kodo", "--reinstall"], {
+    stdio: "inherit",
+  });
+  if (result.error) {
+    throw new CliError(`Failed to run uv: ${result.error.message}`);
+  }
+  return result.status ?? 1;
 }
 
 function issueSubcommand(args: string[], homeDir = os.homedir()): void {
@@ -591,11 +683,15 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
 
   const description = getPromptAdapter().text("Describe what went wrong (leave empty if obvious)", "") ?? "";
   const status = selected.finished ? "done" : `interrupted at cycle ${selected.completedCycles}/${selected.maxCycles}`;
+  const runDir = path.dirname(selected.logFile);
+  const archivePath = packRunArchive(runDir);
   const body = [
     `**Run:** ${selected.runId}`,
     `**Goal:** ${selected.goal.slice(0, 500)}${selected.goal.length > 500 ? "..." : ""}`,
     `**Status:** ${status}`,
+    `**kodo:** ${VERSION}`,
     `**Log file:** ${selected.logFile}`,
+    ...(archivePath === null ? [] : ["", `Attach the generated run archive from \`${archivePath}\`.`]),
     "",
     description.trim(),
   ]
@@ -605,6 +701,9 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
   const url = `https://github.com/ikamensh/kodo/issues/new?title=${encodeURIComponent(`Bug report: run ${selected.runId}`)}&body=${encodeURIComponent(body)}`;
 
   const lines = ["Issue URL:", url];
+  if (archivePath !== null) {
+    lines.push("", `Run archive: ${archivePath}`);
+  }
   if (!parsed.noOpen) {
     lines.push("", "Open the URL in your browser and attach the run artifacts manually.");
   }
@@ -630,8 +729,7 @@ export function handleSubcommand(command: TopLevelSubcommand, args: string[]): n
       listBackendsSubcommand();
       return 0;
     case "update":
-      placeholderSummary(command, "Self-update is not implemented yet in the TypeScript port.", args);
-      return 0;
+      return updateSubcommand();
     case "help":
       return -1;
     case "team":

@@ -1,12 +1,16 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { getTeamByName } from "../config/team-config.js";
 import { CliError, EXIT_ERROR } from "../core/errors.js";
+import { emit as emitLogEvent, init as initLog, RunDir } from "../logging/log.js";
 import { VERSION } from "../core/version.js";
-import { findIncompleteRuns, getRunById } from "../logging/runs.js";
+import { findIncompleteRuns, getRunById, runsRoot } from "../logging/runs.js";
 import { parseMainArgs, isHandledAsSubcommand } from "./params.js";
 import { getPromptAdapter } from "./prompts.js";
-import { loadOrResolveRuntimeParams, resolveGoal } from "./runtime.js";
+import { loadOrResolveRuntimeParams, resolveGoal, type ResolvedGoal, type ResolvedRuntimeParams } from "./runtime.js";
 import { handleSubcommand } from "./subcommands.js";
 import type { ParsedMain } from "./types.js";
 import { emitJson, printLines, writeStderr } from "./ui.js";
@@ -66,17 +70,209 @@ function printVersion(): void {
   printLines([`kodo ${VERSION}`]);
 }
 
-function summarizeMainInvocation(parsed: ParsedMain): void {
-  const params = loadOrResolveRuntimeParams(parsed.flags);
-  const goal = resolveGoal(parsed.flags);
+function normalizeGoalText(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    throw new CliError("Goal text is empty.");
+  }
+  return trimmed;
+}
 
+function extractSection(report: string, heading: string): string {
+  const lines = report.split(/\r?\n/gu);
+  const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
+  if (start === -1) {
+    return "";
+  }
+
+  const body: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (lines[index].startsWith("## ")) {
+      break;
+    }
+    body.push(lines[index]);
+  }
+  return body.join("\n").trim();
+}
+
+function extractFindingsFromReport(report: string): string[] {
+  const sections = ["Critical Findings", "Integration & Workflow Findings", "Usability Gaps", "Needs decision"];
+  return sections.flatMap((section) =>
+    extractSection(report, section)
+      .split(/\r?\n/gu)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("- ")),
+  );
+}
+
+function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
+  const prompt = getPromptAdapter();
+  const projectGoalFile = path.join(projectDir, "goal.md");
+  if (existsSync(projectGoalFile)) {
+    try {
+      const content = normalizeGoalText(readFileSync(projectGoalFile, "utf8"));
+      const useExisting = prompt.confirm(`Use existing goal from ${projectGoalFile}?`, true);
+      if (useExisting === null) {
+        throw new CliError("Cancelled.");
+      }
+      if (useExisting) {
+        return { goalText: content, source: "interactive" };
+      }
+    } catch (error) {
+      if (error instanceof CliError) {
+        throw error;
+      }
+    }
+  }
+
+  const goalText = prompt.text("Goal");
+  if (goalText === null) {
+    throw new CliError("Cancelled.");
+  }
+  return { goalText: normalizeGoalText(goalText), source: "interactive" };
+}
+
+function resolveFixFromGoal(parsed: ParsedMain): ResolvedGoal {
+  const runId = parsed.flags.fixFrom;
+  if (runId === null) {
+    throw new CliError("Internal error: missing --fix-from run id.");
+  }
+
+  const runRoot = path.join(runsRoot(), runId);
+  for (const reportName of ["test-report.md", "improve-report.md"]) {
+    const reportPath = path.join(runRoot, reportName);
+    if (!existsSync(reportPath)) {
+      continue;
+    }
+    const content = readFileSync(reportPath, "utf8");
+    const findings = extractFindingsFromReport(content);
+    if (findings.length === 0) {
+      continue;
+    }
+    return {
+      goalText: normalizeGoalText(
+        [
+          `Fix these findings from a previous kodo run (${runId}):`,
+          "",
+          findings.join("\n"),
+          "",
+          "For each finding, write a regression test that fails, then fix the code so the test passes.",
+        ].join("\n"),
+      ),
+      source: "fix-from",
+    };
+  }
+
+  throw new CliError(`No test or improve report with fixable findings found in run ${runId}`);
+}
+
+function buildModeGoal(parsed: ParsedMain, runDir: RunDir): ResolvedGoal {
+  if (parsed.flags.improve) {
+    const reportPath = path.join(runDir.root, "improve-report.md");
+    const focusLine = parsed.flags.focus ? `\n\nFocus area: ${parsed.flags.focus}` : "";
+    return {
+      goalText: normalizeGoalText(
+        `Review this project for simplification, usability, and architecture improvements. Write the report to ${reportPath}.${focusLine}`,
+      ),
+      source: "improve",
+    };
+  }
+
+  if (parsed.flags.test) {
+    const reportPath = path.join(runDir.root, "test-report.md");
+    const focusLine = parsed.flags.focus ? `\n\nFocus area: ${parsed.flags.focus}` : "";
+    const targetLine = parsed.flags.target.length > 0 ? `\n\nTargets: ${parsed.flags.target.join(", ")}` : "";
+    return {
+      goalText: normalizeGoalText(
+        `Test this project through realistic workflows, edge cases, and regressions. Write the report to ${reportPath}.${focusLine}${targetLine}`,
+      ),
+      source: "test",
+    };
+  }
+
+  if (parsed.flags.fixFrom !== null) {
+    return resolveFixFromGoal(parsed);
+  }
+
+  const goal = resolveGoal(parsed.flags);
+  if (goal.goalText !== null) {
+    return { ...goal, goalText: normalizeGoalText(goal.goalText) };
+  }
+  return resolveInteractiveGoal(parsed.flags.project);
+}
+
+function teamAgentNames(teamName: string): string[] {
+  const team = getTeamByName(teamName);
+  return team === null ? [] : Object.keys(team.config.agents);
+}
+
+function writeRunArtifacts(runDir: RunDir, params: ResolvedRuntimeParams, goal: ResolvedGoal): void {
+  writeFileSync(runDir.configFile, `${JSON.stringify(params, null, 2)}\n`, "utf8");
+  writeFileSync(runDir.goalFile, `${goal.goalText ?? ""}\n`, "utf8");
+  if (goal.source !== "interactive") {
+    writeFileSync(runDir.goalRefinedFile, `${goal.goalText ?? ""}\n`, "utf8");
+  }
+
+  const team = getTeamByName(params.team);
+  if (team !== null) {
+    writeFileSync(runDir.teamFile, `${JSON.stringify(team.config, null, 2)}\n`, "utf8");
+  }
+}
+
+function createPendingRun(parsed: ParsedMain): {
+  goal: ResolvedGoal;
+  params: ResolvedRuntimeParams;
+  runDir: RunDir;
+} {
+  const params = loadOrResolveRuntimeParams(parsed.flags);
+  const runDir = RunDir.create(parsed.flags.project);
+  const goal = buildModeGoal(parsed, runDir);
+  writeRunArtifacts(runDir, params, goal);
+  initLog(runDir);
+  emitLogEvent("cli_args", {
+    ...params,
+    debug: parsed.flags.debug,
+    goal_text: goal.goalText,
+    has_plan: false,
+    project_dir: parsed.flags.project,
+  });
+  emitLogEvent("run_start", {
+    goal: goal.goalText,
+    has_stages: false,
+    max_cycles: params.maxCycles,
+    max_exchanges: params.maxExchanges,
+    model: params.orchestratorModel,
+    orchestrator: params.orchestrator,
+    project_dir: parsed.flags.project,
+    team: teamAgentNames(params.team),
+  });
+  if (parsed.flags.debug) {
+    emitLogEvent("debug_run_start");
+  }
+
+  return { goal, params, runDir };
+}
+
+function summarizeMainInvocation(parsed: ParsedMain): void {
+  const { goal, params, runDir } = createPendingRun(parsed);
+  const reportPath = parsed.flags.improve
+    ? path.join(runDir.root, "improve-report.md")
+    : parsed.flags.test
+      ? path.join(runDir.root, "test-report.md")
+      : null;
   const summary = {
     status: "pending",
     command: parsed.command,
     goal_source: goal.source,
     goal_text: goal.goalText,
     params,
-    message: "Runtime parameter resolution is implemented; execution orchestration is still pending the deeper TypeScript port.",
+    focus: parsed.flags.focus,
+    log_file: runDir.logFile,
+    report_path: reportPath,
+    run_id: runDir.runId,
+    run_root: runDir.root,
+    targets: parsed.flags.target,
+    message: "Pending run scaffold created.",
   };
 
   if (parsed.flags.json) {
@@ -85,14 +281,20 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
   }
 
   printLines([
-    "Runtime parameter resolution is implemented; execution orchestration is still pending the deeper TypeScript port.",
+    "Pending run scaffold created.",
     "",
+    `Run ID: ${runDir.runId}`,
+    `Run dir: ${runDir.root}`,
+    `Log file: ${runDir.logFile}`,
     `Mode: ${parsed.command}`,
     `Project: ${parsed.flags.project}`,
     `Team: ${params.team}`,
     `Orchestrator: ${params.orchestrator} (${params.orchestratorModel})`,
     `Budget: ${params.maxExchanges} exchanges/cycle, ${params.maxCycles} cycles`,
     `Auto-commit: ${params.autoCommit ? "enabled" : "disabled"}`,
+    ...(reportPath === null ? [] : [`Report path: ${reportPath}`]),
+    ...(parsed.flags.focus === null ? [] : [`Focus: ${parsed.flags.focus}`]),
+    ...(parsed.flags.target.length === 0 ? [] : [`Targets: ${parsed.flags.target.join(", ")}`]),
     `Goal source: ${goal.source}`,
     ...(goal.goalText === null ? [] : [`Goal: ${goal.goalText.replace(/\s+/gu, " ").trim()}`]),
   ]);
@@ -194,11 +396,11 @@ export function runCli(argv = process.argv.slice(2)): number {
           log_file: run.logFile,
           run_id: run.runId,
           status: "pending",
-          message: "Resume target resolved; execution resume is still pending the deeper TypeScript port.",
+          message: "Resume target resolved.",
         });
       } else {
         printLines([
-          "Resume target resolved; execution resume is still pending the deeper TypeScript port.",
+          "Resume target resolved.",
           "",
           `Run ID: ${run.runId}`,
           `Log file: ${run.logFile}`,

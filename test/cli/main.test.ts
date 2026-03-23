@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -101,6 +101,51 @@ describe("runCli main shell", () => {
     expect(runCli(["--test", "--project", project, "--target", "src"])).toBe(0);
     expect(io.stdout()).toContain("Mode: test");
     expect(io.stdout()).toContain(`Project: ${project}`);
+    expect(io.stdout()).toContain("Targets: src");
+    io.restore();
+  });
+
+  it("builds an improve goal that points at the improve report path", () => {
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--improve", "--project", project, "--focus", "error handling"])).toBe(0);
+    const runDir = io.stdout().match(/Run dir: (.+)/u)?.[1];
+    expect(runDir).toBeTruthy();
+    const goalPath = runDir ? path.join(runDir, "goal.md") : "";
+    const goal = goalPath ? readFileSync(goalPath, "utf8") : "";
+    expect(goal).toContain("improve-report.md");
+    expect(goal).toContain("Focus area: error handling");
+    io.restore();
+  });
+
+  it("builds a fix-from goal from findings in a prior report", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    mkdirSync(project, { recursive: true });
+    const priorRunDir = writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: project, goal: "Prior test run" });
+    writeFileSync(
+      path.join(priorRunDir, "test-report.md"),
+      [
+        "## Critical Findings",
+        "- Login fails when session expires",
+        "",
+        "## Needs decision",
+        "- Decide whether expired sessions redirect or show inline re-auth",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const io = captureOutput();
+
+    expect(runCli(["--fix-from", "20260322_120000", "--project", project])).toBe(0);
+    const runDir = io.stdout().match(/Run dir: (.+)/u)?.[1];
+    expect(runDir).toBeTruthy();
+    const goalPath = runDir ? path.join(runDir, "goal.md") : "";
+    const goal = goalPath ? readFileSync(goalPath, "utf8") : "";
+    expect(goal).toContain("Login fails when session expires");
+    expect(goal).toContain("Decide whether expired sessions redirect");
     io.restore();
   });
 

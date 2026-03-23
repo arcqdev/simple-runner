@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +8,7 @@ import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
 import { projectConfigPath } from "../../src/config/project-config.js";
 import { clearUserConfigCache } from "../../src/config/user-config.js";
+import { getRunById, runsRoot } from "../../src/logging/runs.js";
 import { scriptedPrompts } from "../helpers/prompts.js";
 import { captureOutput } from "../helpers/stdout.js";
 
@@ -56,6 +57,8 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Goal source: goal-file");
     expect(io.stdout()).toContain("Goal: Build an API server");
     expect(io.stdout()).toContain("Orchestrator: api (gpt-5.4)");
+    expect(io.stdout()).toContain("Run ID:");
+    expect(io.stdout()).toContain("Log file:");
 
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "full",
@@ -65,6 +68,9 @@ describe("runCli noninteractive runtime resolution", () => {
       maxCycles: 5,
       autoCommit: true,
     });
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    expect(runId).toBeTruthy();
+    expect(runId ? existsSync(path.join(runsRoot(homeDir), runId, "goal.md")) : false).toBe(true);
     io.restore();
   });
 
@@ -131,7 +137,7 @@ describe("runCli noninteractive runtime resolution", () => {
         autoCommit: false,
       })}\n`,
     );
-    setPromptAdapter(scriptedPrompts([true]));
+    setPromptAdapter(scriptedPrompts([true, "Refine the CLI prompts"]));
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);
@@ -158,7 +164,7 @@ describe("runCli noninteractive runtime resolution", () => {
         maxCycles: 5,
       })}\n`,
     );
-    setPromptAdapter(scriptedPrompts([true]));
+    setPromptAdapter(scriptedPrompts([true, "Ship the migration"]));
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);
@@ -177,7 +183,9 @@ describe("runCli noninteractive runtime resolution", () => {
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
-    setPromptAdapter(scriptedPrompts(["quick — No verifiers — orchestrator is the quality gate", "api", "gpt-5.4", "12", "3", "high"]));
+    setPromptAdapter(
+      scriptedPrompts(["quick — No verifiers — orchestrator is the quality gate", "api", "gpt-5.4", "12", "3", "high", "Audit the API surface"]),
+    );
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);
@@ -192,6 +200,42 @@ describe("runCli noninteractive runtime resolution", () => {
       autoCommit: true,
       effort: "high",
     });
+    io.restore();
+  });
+
+  it("creates a pending run that is discoverable by run id", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship the CLI", "--project", project])).toBe(0);
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    expect(runId).toBeTruthy();
+
+    const run = runId ? getRunById(runId, homeDir) : null;
+    expect(run).not.toBeNull();
+    expect(run?.goal).toBe("Ship the CLI");
+    expect(run?.projectDir).toBe(project);
+    expect(run?.orchestrator).toBe("api");
+    io.restore();
+  });
+
+  it("reuses project goal.md for interactive runs", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
+    setPromptAdapter(scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]));
+    const io = captureOutput();
+
+    expect(runCli(["--project", project])).toBe(0);
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    expect(runId).toBeTruthy();
+    const goalFile = runId ? path.join(runsRoot(homeDir), runId, "goal.md") : "";
+    expect(goalFile ? readFileSync(goalFile, "utf8") : "").toContain("Refactor the auth flow");
     io.restore();
   });
 });
