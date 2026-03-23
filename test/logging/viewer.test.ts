@@ -4,8 +4,9 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { openViewer } from "../../src/viewer.js";
+import { serveViewer, openViewer, runViewerCli } from "../../src/viewer.js";
 import { writeRunFixture } from "../helpers/runs.js";
+import { captureOutput } from "../helpers/stdout.js";
 
 function makeTempDir(): string {
   const directory = path.join(os.tmpdir(), `kodo-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -65,5 +66,38 @@ describe("viewer", () => {
     expect(html).toContain("known run");
     expect(html).toContain("20260323_010203");
     expect(html).toContain("Investigate the auth regression");
+  });
+
+  it("serves the viewer over HTTP and exposes run log API responses", async () => {
+    const homeDir = makeTempDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    writeRunFixture(homeDir, {
+      runId: "20260323_010203",
+      goal: "Investigate the auth regression",
+      projectDir: path.join(homeDir, "project"),
+    });
+
+    const server = await serveViewer(0, { openBrowser: false });
+    try {
+      const indexResponse = await fetch(server.url);
+      expect(indexResponse.ok).toBe(true);
+      const html = await indexResponse.text();
+      expect(html).toContain("20260323_010203");
+
+      const logResponse = await fetch(`${server.url}api/log/20260323_010203`);
+      expect(logResponse.ok).toBe(true);
+      const body = await logResponse.text();
+      expect(body).toContain("\"event\":\"run_start\"");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("prints viewer help from the standalone CLI", async () => {
+    const io = captureOutput();
+
+    await expect(runViewerCli(["--help"])).resolves.toBe(0);
+    expect(io.stdout()).toContain("Usage: kodo-viewer");
+    io.restore();
   });
 });

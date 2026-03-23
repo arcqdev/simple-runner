@@ -3,11 +3,12 @@
   "version": "0.4.261",
   "private": true,
   "bin": {
-    "kodo": "./dist/cli.js"
+    "kodo": "./dist/cli.js",
+    "kodo-viewer": "./dist/viewer-cli.js"
   },
   "type": "module",
   "scripts": {
-    "build": "vite build && chmod +x dist/cli.js",
+    "build": "vite build && chmod +x dist/cli.js dist/viewer-cli.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
     "dev": "vite-node src/cli.ts",
     "format": "oxfmt --write .",

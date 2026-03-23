@@ -8,14 +8,27 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
-import { listRuns } from "./logging/runs.js";
+import { listRuns, runsRoot } from "./logging/runs.js";
 
 type ViewerOptions = {
   openBrowser?: boolean;
+};
+
+type ServeViewerOptions = ViewerOptions & {
+  logPath?: string | null;
+  onListen?: (url: string) => void;
+};
+
+type ViewerServer = {
+  close: () => Promise<void>;
+  port: number;
+  url: string;
 };
 
 function cleanupStaleViewerFiles(now = Date.now()): void {
@@ -52,6 +65,23 @@ function loadEvents(logPath: string): unknown[] {
         return [];
       }
     });
+}
+
+function loadRunLog(runId: string): string {
+  if (runId.includes("/") || runId.includes("\\") || runId.includes("..")) {
+    throw new Error("Invalid run_id");
+  }
+
+  const runDir = path.join(runsRoot(), runId);
+  const logFile = existsSync(path.join(runDir, "log.jsonl"))
+    ? path.join(runDir, "log.jsonl")
+    : path.join(runDir, "run.jsonl");
+
+  if (!existsSync(logFile)) {
+    throw new Error(`Run not found: ${runId}`);
+  }
+
+  return readFileSync(logFile, "utf8");
 }
 
 function buildHtml(logPath: string | null): string {
@@ -326,6 +356,169 @@ export function openViewer(logPath: string | null = null, options: ViewerOptions
   }
 
   return url;
+}
+
+export async function serveViewer(port: number, options: ServeViewerOptions = {}): Promise<ViewerServer> {
+  const logPath = options.logPath ?? null;
+  if (logPath !== null && !existsSync(logPath)) {
+    throw new Error(`File not found: ${logPath}`);
+  }
+
+  cleanupStaleViewerFiles();
+  const html = buildHtml(logPath);
+
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+
+    if (requestUrl.pathname === "/") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(html);
+      return;
+    }
+
+    if (requestUrl.pathname.startsWith("/api/log/")) {
+      const runId = decodeURIComponent(requestUrl.pathname.slice("/api/log/".length));
+      try {
+        const data = loadRunLog(runId);
+        response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        response.end(data);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const status = message === "Invalid run_id" ? 400 : message.startsWith("Run not found:") ? 404 : 500;
+        response.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+        response.end(message);
+      }
+      return;
+    }
+
+    response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    response.end("Not found");
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    throw new Error("Failed to determine viewer server address.");
+  }
+
+  const url = `http://127.0.0.1:${address.port}/`;
+  if (options.openBrowser ?? true) {
+    maybeOpenExternal(url);
+  }
+  options.onListen?.(url);
+
+  return {
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+    port: address.port,
+    url,
+  };
+}
+
+function parseViewerArgs(argv: string[]): { help: boolean; logfile: string | null; port: number; serve: boolean } {
+  let logfile: string | null = null;
+  let port = 8080;
+  let serve = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--help" || token === "-h") {
+      return { help: true, logfile, port, serve };
+    }
+    if (token === "--serve") {
+      serve = true;
+      continue;
+    }
+    if (token === "--port") {
+      const value = argv[index + 1];
+      if (value === undefined || !/^-?\d+$/u.test(value)) {
+        throw new Error("argument --port: expected integer value");
+      }
+      port = Number.parseInt(value, 10);
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      throw new Error(`unrecognized arguments: ${token}`);
+    }
+    if (logfile !== null) {
+      throw new Error(`unrecognized arguments: ${token}`);
+    }
+    logfile = token;
+  }
+
+  return { help: false, logfile, port, serve };
+}
+
+export async function runViewerCli(argv = process.argv.slice(2)): Promise<number> {
+  try {
+    const parsed = parseViewerArgs(argv);
+    if (parsed.help) {
+      process.stdout.write(
+        [
+          "Usage: kodo-viewer [logfile] [--serve] [--port PORT]",
+          "",
+          "Open a JSONL log file in the kodo viewer.",
+        ].join("\n") + "\n",
+      );
+      return 0;
+    }
+
+    if (parsed.logfile !== null) {
+      const resolved = path.resolve(parsed.logfile);
+      if (!existsSync(resolved)) {
+        process.stderr.write(`File not found: ${resolved}\n`);
+        return 1;
+      }
+      const stats = statSync(resolved);
+      if (stats.isDirectory()) {
+        process.stderr.write(`Expected a log file, not a directory: ${resolved}\n`);
+        return 1;
+      }
+      if (parsed.serve) {
+        const server = await serveViewer(parsed.port, { logPath: resolved });
+        process.stdout.write(`Log viewer: ${server.url}\n`);
+        return await new Promise<number>((resolve) => {
+          const close = () => {
+            void server.close().finally(() => resolve(0));
+          };
+          process.once("SIGINT", close);
+          process.once("SIGTERM", close);
+        });
+      }
+
+      process.stdout.write(`Log viewer: ${openViewer(resolved)}\n`);
+      return 0;
+    }
+
+    if (parsed.serve) {
+      const server = await serveViewer(parsed.port, { logPath: null });
+      process.stdout.write(`Log viewer: ${server.url}\n`);
+      return await new Promise<number>((resolve) => {
+        const close = () => {
+          void server.close().finally(() => resolve(0));
+        };
+        process.once("SIGINT", close);
+        process.once("SIGTERM", close);
+      });
+    }
+
+    process.stdout.write(`Log viewer: ${openViewer(null)}\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
 }
 
 export function cleanupViewerFile(url: string): void {

@@ -42,10 +42,10 @@ Concrete tasks:
 
 - [x] Enumerate core CLI commands, aliases, and top-level flags used to drive the TS shell.
 - [ ] Enumerate all CLI commands, aliases, flags, defaults, and JSON output shapes exhaustively.
-- [ ] Enumerate all subcommands and secondary entrypoints:
+  - [ ] Enumerate all subcommands and secondary entrypoints:
   - [x] `runs`, `logs`, `issue`, `backends`, `teams`, `update`
   - [ ] `teams add`, `teams edit`, `teams auto`
-  - [ ] standalone viewer invocation paths
+  - [x] standalone viewer invocation paths
   - [x] singular/plural command aliases
   - [x] `test` / `improve` alias routing
 - [x] Enumerate and port initial user-visible option validation for:
@@ -210,10 +210,12 @@ Concrete tasks:
 - [x] Add initial JSONL log init/append/emit helpers with regression tests.
 - [ ] Port stats/report helpers.
 - [ ] Port replay/log formatting.
-- [ ] Port `viewer.py`, `viewer.html`, and trace upload support.
+- [x] Port `viewer.py` and standalone viewer entrypoint behavior.
+- [ ] Port `viewer.html` and trace upload support.
 - [ ] Port resume path expectations used by the CLI and orchestrators.
 - [ ] Preserve Python artifact names and on-disk layout unless a migration shim is added.
-- [ ] Preserve documented viewer invocation behavior.
+- [x] Preserve standalone viewer invocation behavior.
+- [ ] Preserve `kodo logs` HTTP-serving behavior end-to-end.
 
 Exit criteria:
 

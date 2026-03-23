@@ -8,16 +8,16 @@ const external = new Set([
 
 export default defineConfig({
   build: {
-    lib: {
-      entry: "src/cli.ts",
-      formats: ["es"],
-      fileName: () => "cli.js",
-    },
     minify: false,
     outDir: "dist",
     rollupOptions: {
+      input: {
+        cli: "src/cli.ts",
+        "viewer-cli": "src/viewer-cli.ts",
+      },
       external: Array.from(external),
       output: {
+        entryFileNames: "[name].js",
         banner: "#!/usr/bin/env node",
       },
     },
