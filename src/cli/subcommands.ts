@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 
 import {
   AGENT_DEFAULTS,
@@ -13,6 +14,8 @@ import {
   type TeamConfig,
 } from "../config/team-config.js";
 import { CliError } from "../core/errors.js";
+import { availableBackends } from "../runtime/backends.js";
+import { listRuns, truncateWord, type RunState } from "../logging/runs.js";
 import { getPromptAdapter } from "./prompts.js";
 import type { TopLevelSubcommand } from "./types.js";
 import { printLines, writeStderr } from "./ui.js";
@@ -36,6 +39,103 @@ function placeholderSummary(command: string, detail: string, args: string[]): vo
 
 function printTeamHelp(): void {
   printLines(TEAM_HELP);
+}
+
+function parseLogsArgs(args: string[]): { logfile: string | null; port: number } {
+  let logfile: string | null = null;
+  let port = 8080;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--port") {
+      const raw = args[index + 1];
+      if (raw === undefined || !/^-?\d+$/u.test(raw)) {
+        throw new CliError("argument --port: expected integer value");
+      }
+      port = Number.parseInt(raw, 10);
+      index += 1;
+      continue;
+    }
+    if (token === "--help" || token === "-h") {
+      printLines([
+        "Usage: kodo logs [logfile] [--port PORT]",
+        "",
+        "Open or inspect run logs for the local viewer.",
+      ]);
+      return { logfile: "", port };
+    }
+    if (token.startsWith("-")) {
+      throw new CliError(`unrecognized arguments: ${token}`);
+    }
+    if (logfile !== null) {
+      throw new CliError(`unrecognized arguments: ${token}`);
+    }
+    logfile = token;
+  }
+
+  return { logfile, port };
+}
+
+function parseIssueArgs(args: string[]): { noOpen: boolean; project: string; runId: string | null } {
+  let noOpen = false;
+  let project = ".";
+  let runId: string | null = null;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === "--help" || token === "-h") {
+      printLines([
+        "Usage: kodo issue [run_id] [--project PROJECT] [--no-open]",
+        "",
+        "Create a GitHub issue URL for a selected run.",
+      ]);
+      return { noOpen: true, project, runId: "" };
+    }
+    if (token === "--no-open") {
+      noOpen = true;
+      continue;
+    }
+    if (token === "--project") {
+      const value = args[index + 1];
+      if (value === undefined) {
+        throw new CliError("argument --project: expected one argument");
+      }
+      project = value;
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      throw new CliError(`unrecognized arguments: ${token}`);
+    }
+    if (runId !== null) {
+      throw new CliError(`unrecognized arguments: ${token}`);
+    }
+    runId = token;
+  }
+
+  return { noOpen, project, runId };
+}
+
+function formatRunStatus(run: RunState): string {
+  return run.finished ? "done" : `cycle ${run.completedCycles}/${run.maxCycles}`;
+}
+
+function pickRun(runs: RunState[], prompt = "Select run:"): RunState | null {
+  if (runs.length === 0) {
+    return null;
+  }
+  if (runs.length === 1) {
+    return runs[0];
+  }
+
+  const choices = runs.map((run) => `${run.runId}  ${formatRunStatus(run)}  ${truncateWord(run.goal.replace(/\s+/gu, " "), 50)}`);
+  const selected = getPromptAdapter().select(prompt, choices, choices[0]);
+  if (selected === null) {
+    return null;
+  }
+
+  const selectedId = selected.split(/\s+/u, 1)[0];
+  return runs.find((run) => run.runId === selectedId) ?? null;
 }
 
 function listTeams(homeDir = os.homedir()): void {
@@ -400,23 +500,134 @@ function autoTeam(modeName: string, homeDir = os.homedir()): void {
   printLines([`Saved to ${destination}`, "", `Use with: kodo --team ${modeName}`]);
 }
 
+function listRunsSubcommand(args: string[], homeDir = os.homedir()): void {
+  if (args.includes("--help") || args.includes("-h")) {
+    printLines([
+      "Usage: kodo runs [project_dir]",
+      "",
+      "List all known runs, optionally filtered to a project directory.",
+    ]);
+    return;
+  }
+  if (args.length > 1) {
+    throw new CliError(`unrecognized arguments: ${args.slice(1).join(" ")}`);
+  }
+
+  const projectDir = args[0] ? path.resolve(args[0]) : undefined;
+  const runs = listRuns(projectDir, homeDir);
+  if (runs.length === 0) {
+    printLines(["No runs found."]);
+    return;
+  }
+
+  const idWidth = Math.max(...runs.map((run) => run.runId.length));
+  const projectWidth = Math.max(...runs.map((run) => run.projectDir.length));
+  const header = `  ${"RUN ID".padEnd(idWidth)}  ${"STATUS".padEnd(10)}  ${"PROJECT".padEnd(projectWidth)}  GOAL`;
+  printLines([header, `  ${"-".repeat(header.length - 2)}`]);
+  for (const run of runs) {
+    printLines([
+      `  ${run.runId.padEnd(idWidth)}  ${formatRunStatus(run).padEnd(10)}  ${run.projectDir.padEnd(projectWidth)}  ${truncateWord(run.goal.replace(/\s+/gu, " "), 60)}`,
+    ]);
+  }
+}
+
+function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
+  const parsed = parseLogsArgs(args);
+  if (parsed.logfile === "") {
+    return;
+  }
+
+  if (parsed.logfile !== null) {
+    const resolved = path.resolve(parsed.logfile);
+    if (!resolved.endsWith(".jsonl")) {
+      throw new CliError(`Expected a .jsonl log file: ${resolved}`);
+    }
+    printLines([
+      `Viewer support is not implemented yet in the TypeScript port.`,
+      `Log file: ${resolved}`,
+      `Requested port: ${parsed.port}`,
+    ]);
+    return;
+  }
+
+  const runs = listRuns(undefined, homeDir);
+  if (runs.length === 0) {
+    throw new CliError("No runs found. Specify a log file or run kodo first.");
+  }
+
+  const selected = pickRun(runs, "Select run for logs:");
+  if (selected === null) {
+    throw new CliError("Cancelled.");
+  }
+
+  printLines([
+    `Viewer support is not implemented yet in the TypeScript port.`,
+    `Log file: ${selected.logFile}`,
+    `Requested port: ${parsed.port}`,
+  ]);
+}
+
+function listBackendsSubcommand(): void {
+  const backends = availableBackends();
+  const lines = Object.entries(backends).map(([name, installed]) => `  ${name.padEnd(12)} ${installed ? "installed" : "missing"}`);
+  printLines(["Available backends:", ...lines]);
+}
+
+function issueSubcommand(args: string[], homeDir = os.homedir()): void {
+  const parsed = parseIssueArgs(args);
+  if (parsed.runId === "") {
+    return;
+  }
+
+  const projectDir = path.resolve(parsed.project);
+  const selected =
+    parsed.runId !== null
+      ? getRunById(parsed.runId, homeDir)
+      : pickRun(listRuns(projectDir, homeDir), "Select run to report:");
+
+  if (selected === null) {
+    throw new CliError(parsed.runId !== null ? `Run not found: ${parsed.runId}` : "No runs found. Specify a run ID or run kodo first.");
+  }
+
+  const description = getPromptAdapter().text("Describe what went wrong (leave empty if obvious)", "") ?? "";
+  const status = selected.finished ? "done" : `interrupted at cycle ${selected.completedCycles}/${selected.maxCycles}`;
+  const body = [
+    `**Run:** ${selected.runId}`,
+    `**Goal:** ${selected.goal.slice(0, 500)}${selected.goal.length > 500 ? "..." : ""}`,
+    `**Status:** ${status}`,
+    `**Log file:** ${selected.logFile}`,
+    "",
+    description.trim(),
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
+
+  const url = `https://github.com/ikamensh/kodo/issues/new?title=${encodeURIComponent(`Bug report: run ${selected.runId}`)}&body=${encodeURIComponent(body)}`;
+
+  const lines = ["Issue URL:", url];
+  if (!parsed.noOpen) {
+    lines.push("", "Open the URL in your browser and attach the run artifacts manually.");
+  }
+  printLines(lines);
+}
+
 export function handleSubcommand(command: TopLevelSubcommand, args: string[]): number {
   switch (command) {
     case "run":
     case "runs":
-      placeholderSummary(command, "Run listing is not implemented yet in the TypeScript port.", args);
+      listRunsSubcommand(args);
       return 0;
     case "log":
     case "logs":
-      placeholderSummary(command, "Log viewer support is not implemented yet in the TypeScript port.", args);
+      showLogsSubcommand(args);
       return 0;
     case "issue":
     case "issues":
-      placeholderSummary(command, "Issue reporting is not implemented yet in the TypeScript port.", args);
+      issueSubcommand(args);
       return 0;
     case "backend":
     case "backends":
-      placeholderSummary(command, "Backend inspection is not implemented yet in the TypeScript port.", args);
+      listBackendsSubcommand();
       return 0;
     case "update":
       placeholderSummary(command, "Self-update is not implemented yet in the TypeScript port.", args);

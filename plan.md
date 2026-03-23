@@ -117,8 +117,8 @@ Concrete tasks:
   - [x] CLI argument audit coverage
   - [x] help / version coverage
   - [x] JSON mode validation behavior
-  - [ ] run listing / resume selection
-  - [ ] backend status / team listing shape
+  - [x] run listing / resume selection
+  - [x] backend status / team listing shape
 - [x] Add conventions for test naming so TS files can be mapped back to Python sources via the migration matrix.
 
 Exit criteria:
@@ -206,7 +206,7 @@ Deliverables:
 Concrete tasks:
 
 - [ ] Port run directory management.
-- [ ] Port run parsing and listing.
+- [x] Port run parsing and listing.
 - [ ] Port stats/report helpers.
 - [ ] Port replay/log formatting.
 - [ ] Port `viewer.py`, `viewer.html`, and trace upload support.
@@ -342,9 +342,10 @@ Minimum parity suite before cutover:
 - [x] CLI parsing and help/version coverage started.
 - [x] CLI JSON validation coverage started.
 - [ ] CLI prompt/confirmation/output coverage completed.
-- [ ] Run directory creation and listing covered.
-- [ ] Resume selection logic covered.
+- [x] Run directory creation and listing covered.
+- [x] Resume selection logic covered.
 - [ ] Viewer entrypoints and log-serving coverage completed.
-- [ ] `issue`, `backends`, `teams`, `teams add/edit/auto`, and `update` coverage completed.
+- [x] `issue`, `backends`, `teams`, and `teams add/edit/auto` coverage completed.
+- [ ] `update` coverage completed.
 - [x] `--debug` and `--orchestrator-model` parsing/validation coverage started.
 - [ ] One working ACP backend path covered.

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
 import { scriptedPrompts } from "../helpers/prompts.js";
+import { makeRunsHome, writeRunFixture } from "../helpers/runs.js";
 import { captureOutput } from "../helpers/stdout.js";
 
 afterEach(() => {
@@ -30,10 +31,12 @@ describe("runCli subcommands", () => {
   });
 
   it("treats singular command aliases as subcommands", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     const io = captureOutput();
 
     expect(runCli(["run"])).toBe(0);
-    expect(io.stdout()).toContain("Run listing is not implemented yet");
+    expect(io.stdout()).toContain("No runs found.");
     io.restore();
   });
 
@@ -135,6 +138,63 @@ describe("runCli subcommands", () => {
     expect(existsSync(savedPath)).toBe(true);
     expect(readFileSync(savedPath, "utf8")).toContain("Quick but edited");
     expect(io.stdout()).toContain("Copying built-in team 'quick'");
+    io.restore();
+  });
+
+  it("lists runs in a table and filters by project", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const projectA = path.join(homeDir, "project-a");
+    const projectB = path.join(homeDir, "project-b");
+    writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: projectA, completedCycles: 1, goal: "Fix auth flow regression" });
+    writeRunFixture(homeDir, { runId: "20260322_110000", projectDir: projectB, finished: true, goal: "Polish docs" });
+    const io = captureOutput();
+
+    expect(runCli(["runs", projectA])).toBe(0);
+    expect(io.stdout()).toContain("RUN ID");
+    expect(io.stdout()).toContain("20260322_120000");
+    expect(io.stdout()).not.toContain("20260322_110000");
+    io.restore();
+  });
+
+  it("resolves logs from a selected run", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    writeRunFixture(homeDir, { runId: "20260322_120000", goal: "Inspect my logs" });
+    const io = captureOutput();
+
+    expect(runCli(["logs"])).toBe(0);
+    expect(io.stdout()).toContain("Log file:");
+    expect(io.stdout()).toContain("20260322_120000/log.jsonl");
+    io.restore();
+  });
+
+  it("lists backend availability", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const binDir = path.join(homeDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(binDir, "codex"), "");
+    vi.stubEnv("PATH", binDir);
+    const io = captureOutput();
+
+    expect(runCli(["backends"])).toBe(0);
+    expect(io.stdout()).toContain("Available backends:");
+    expect(io.stdout()).toContain("codex        installed");
+    io.restore();
+  });
+
+  it("builds an issue URL from a selected run", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: project, completedCycles: 1, goal: "Investigate flaky auth test" });
+    setPromptAdapter(scriptedPrompts([""]));
+    const io = captureOutput();
+
+    expect(runCli(["issue", "--project", project, "--no-open"])).toBe(0);
+    expect(io.stdout()).toContain("Issue URL:");
+    expect(io.stdout()).toContain("Bug%20report%3A%20run%2020260322_120000");
     io.restore();
   });
 });

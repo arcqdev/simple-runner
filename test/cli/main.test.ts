@@ -5,6 +5,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
+import { setPromptAdapter } from "../../src/cli/prompts.js";
+import { scriptedPrompts } from "../helpers/prompts.js";
+import { makeRunsHome, writeRunFixture } from "../helpers/runs.js";
 import { captureOutput } from "../helpers/stdout.js";
 
 function makeProjectDir(): string {
@@ -15,6 +18,7 @@ function makeProjectDir(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  setPromptAdapter(null);
 });
 
 describe("runCli main shell", () => {
@@ -97,6 +101,33 @@ describe("runCli main shell", () => {
     expect(runCli(["--test", "--project", project, "--target", "src"])).toBe(0);
     expect(io.stdout()).toContain("Mode: test");
     expect(io.stdout()).toContain(`Project: ${project}`);
+    io.restore();
+  });
+
+  it("resolves the latest incomplete run for resume", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: project, completedCycles: 1, finished: false });
+    writeRunFixture(homeDir, { runId: "20260322_110000", projectDir: project, completedCycles: 2, finished: true });
+    const io = captureOutput();
+
+    expect(runCli(["--resume", "--project", project])).toBe(0);
+    expect(io.stdout()).toContain("Run ID: 20260322_120000");
+    io.restore();
+  });
+
+  it("prompts when multiple incomplete runs exist for resume", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: project, completedCycles: 1, finished: false, goal: "Latest run" });
+    writeRunFixture(homeDir, { runId: "20260322_121000", projectDir: project, completedCycles: 0, finished: false, goal: "Chosen run" });
+    setPromptAdapter(scriptedPrompts(["20260322_121000  Chosen run"]));
+    const io = captureOutput();
+
+    expect(runCli(["--resume", "--project", project])).toBe(0);
+    expect(io.stdout()).toContain("Run ID: 20260322_121000");
     io.restore();
   });
 });

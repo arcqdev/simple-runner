@@ -3,7 +3,9 @@ import { pathToFileURL } from "node:url";
 
 import { CliError, EXIT_ERROR } from "../core/errors.js";
 import { VERSION } from "../core/version.js";
+import { findIncompleteRuns, getRunById } from "../logging/runs.js";
 import { parseMainArgs, isHandledAsSubcommand } from "./params.js";
+import { getPromptAdapter } from "./prompts.js";
 import { handleSubcommand } from "./subcommands.js";
 import type { ParsedMain } from "./types.js";
 import { emitJson, printLines, writeStderr } from "./ui.js";
@@ -84,6 +86,37 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
   ]);
 }
 
+function resolveResumeRun(parsed: ParsedMain): { logFile: string; runId: string } {
+  const project = parsed.flags.project;
+  if (parsed.flags.resume === "__latest__") {
+    const runs = findIncompleteRuns(project);
+    if (runs.length === 0) {
+      throw new CliError("No incomplete runs found.");
+    }
+    if (runs.length === 1 || parsed.flags.yes || parsed.flags.json) {
+      return { logFile: runs[0].logFile, runId: runs[0].runId };
+    }
+
+    const choices = runs.map((run) => `${run.runId}  ${run.goal.replace(/\s+/gu, " ").slice(0, 50)}`);
+    const selected = getPromptAdapter().select("Select run to resume:", choices, choices[0]);
+    if (selected === null) {
+      throw new CliError("Cancelled.");
+    }
+    const runId = selected.split(/\s+/u, 1)[0];
+    const run = runs.find((candidate) => candidate.runId === runId);
+    if (run === undefined) {
+      throw new CliError(`Run not found: ${runId}`);
+    }
+    return { logFile: run.logFile, runId: run.runId };
+  }
+
+  const run = getRunById(parsed.flags.resume ?? "");
+  if (run === null) {
+    throw new CliError(`Run not found: ${parsed.flags.resume}`);
+  }
+  return { logFile: run.logFile, runId: run.runId };
+}
+
 function emitError(error: unknown, jsonMode: boolean): number {
   if (error instanceof CliError) {
     if (jsonMode && error.exposeAsJson) {
@@ -138,6 +171,26 @@ export function runCli(argv = process.argv.slice(2)): number {
         });
       } else {
         printHelp();
+      }
+      return 0;
+    }
+
+    if (parsed.command === "resume") {
+      const run = resolveResumeRun(parsed);
+      if (parsed.flags.json) {
+        emitJson({
+          log_file: run.logFile,
+          run_id: run.runId,
+          status: "pending",
+          message: "Resume target resolved; execution resume is still pending the deeper TypeScript port.",
+        });
+      } else {
+        printLines([
+          "Resume target resolved; execution resume is still pending the deeper TypeScript port.",
+          "",
+          `Run ID: ${run.runId}`,
+          `Log file: ${run.logFile}`,
+        ]);
       }
       return 0;
     }
