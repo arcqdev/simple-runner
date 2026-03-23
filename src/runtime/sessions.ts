@@ -60,6 +60,7 @@ type SpawnResult = {
 
 type ParsedQueryOutput = {
   inputTokens?: number;
+  isError?: boolean;
   outputTokens?: number;
   rawMessages?: unknown[] | null;
   resultText: string;
@@ -308,6 +309,7 @@ function parseClaudeCliOutput(result: SpawnResult): ParsedQueryOutput {
 
   return {
     inputTokens,
+    isError: errorMessages.length > 0 && resultText.length === 0,
     outputTokens,
     rawMessages: messages,
     resultText,
@@ -397,6 +399,7 @@ function parseCodexOutput(result: SpawnResult): ParsedQueryOutput {
 
   return {
     inputTokens,
+    isError: errorMessages.length > 0 && resultText.length > 0,
     outputTokens,
     rawMessages: messages,
     resultText,
@@ -681,7 +684,11 @@ class SubprocessSession implements Session {
     }
 
     let isError =
-      result.timedOut || result.error !== null || result.exitCode !== 0 || result.signal !== null;
+      result.timedOut ||
+      result.error !== null ||
+      result.exitCode !== 0 ||
+      result.signal !== null ||
+      parsed.isError === true;
     let text = parsed.resultText;
 
     if (!isError && text.length === 0 && result.stderr.trim().length > 0) {

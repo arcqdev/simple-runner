@@ -40,6 +40,24 @@ if (process.env.FAKE_CODEX_MODE === "timeout") {
   setTimeout(() => {}, 5000);
   return;
 }
+if (process.env.FAKE_CODEX_MODE === "malformed") {
+  console.log("not-json");
+  console.log('{"truncated"');
+  console.error("plain stderr fallback");
+  process.exit(0);
+}
+if (process.env.FAKE_CODEX_MODE === "auth") {
+  console.error("Authentication failed: login expired");
+  process.exit(1);
+}
+if (process.env.FAKE_CODEX_MODE === "signal") {
+  process.kill(process.pid, "SIGTERM");
+  return;
+}
+if (process.env.FAKE_CODEX_MODE === "background-error") {
+  console.log(JSON.stringify({ type: "background_event", message: "status 401 unauthorized" }));
+  process.exit(0);
+}
 const resumeIndex = args.indexOf("resume");
 const resumed = resumeIndex !== -1 ? args[resumeIndex + 1] : null;
 console.log(JSON.stringify({ type: "thread.started", thread_id: resumed ?? "thread-1" }));
@@ -121,6 +139,74 @@ describe("session adapters", () => {
     expect(log).toContain('"event":"session_timeout"');
     expect(log).toContain('"event":"session_query_error"');
   });
+
+  it("falls back to stderr when subprocess output is malformed", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    useOnlyPath(binDir);
+    process.env.FAKE_CODEX_MODE = "malformed";
+
+    const projectDir = makeTempDir("kodo-project");
+    const session = createSessionForOrchestrator("codex", "gpt-5.4");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(false);
+    expect(result?.text).toBe("plain stderr fallback");
+  });
+
+  it("classifies authentication failures from subprocess stderr", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    useOnlyPath(binDir);
+    process.env.FAKE_CODEX_MODE = "auth";
+
+    const projectDir = makeTempDir("kodo-project");
+    const session = createSessionForOrchestrator("codex", "gpt-5.4");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.text).toContain("Authentication failed");
+  });
+
+  it("treats structured background errors as failures", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    useOnlyPath(binDir);
+    process.env.FAKE_CODEX_MODE = "background-error";
+
+    const projectDir = makeTempDir("kodo-project");
+    const session = createSessionForOrchestrator("codex", "gpt-5.4");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.text).toContain("unauthorized");
+  });
+
+  it("surfaces signal termination clearly", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    useOnlyPath(binDir);
+    process.env.FAKE_CODEX_MODE = "signal";
+
+    const projectDir = makeTempDir("kodo-project");
+    const session = createSessionForOrchestrator("codex", "gpt-5.4");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.text).toContain("SIGTERM");
+  });
 });
 
 describe("runtime integration", () => {
@@ -134,12 +220,16 @@ describe("runtime integration", () => {
     mkdirSync(path.join(projectDir, ".kodo"), { recursive: true });
     writeFileSync(
       path.join(projectDir, ".kodo", "team.json"),
-      `${JSON.stringify({
-        agents: {
-          worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      `${JSON.stringify(
+        {
+          agents: {
+            worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+          },
+          verifiers: { testers: [], browser_testers: [], reviewers: [] },
         },
-        verifiers: { testers: [], browser_testers: [], reviewers: [] },
-      }, null, 2)}\n`,
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
     const io = captureOutput();

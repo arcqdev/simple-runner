@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -16,9 +16,17 @@ afterEach(() => {
 });
 
 function makeHomeDir(): string {
-  const homeDir = path.join(os.tmpdir(), `kodo-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const homeDir = path.join(
+    os.tmpdir(),
+    `kodo-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
+}
+
+function writeExecutable(filePath: string, content: string): void {
+  writeFileSync(filePath, content, "utf8");
+  chmodSync(filePath, 0o755);
 }
 
 describe("runCli subcommands", () => {
@@ -76,7 +84,9 @@ describe("runCli subcommands", () => {
     expect(io.stdout()).toContain("Generated team 'quick'");
     expect(io.stdout()).toContain("Use with: kodo --team quick");
 
-    const saved = JSON.parse(readFileSync(savedPath, "utf8")) as { agents: Record<string, { backend: string }> };
+    const saved = JSON.parse(readFileSync(savedPath, "utf8")) as {
+      agents: Record<string, { backend: string }>;
+    };
     expect(Object.values(saved.agents).every((agent) => agent.backend === "codex")).toBe(true);
     io.restore();
   });
@@ -124,12 +134,7 @@ describe("runCli subcommands", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     setPromptAdapter(
-      scriptedPrompts([
-        "Edit team settings",
-        "Quick but edited",
-        "",
-        "Save & exit",
-      ]),
+      scriptedPrompts(["Edit team settings", "Quick but edited", "", "Save & exit"]),
     );
     const io = captureOutput();
 
@@ -146,8 +151,18 @@ describe("runCli subcommands", () => {
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     const projectA = path.join(homeDir, "project-a");
     const projectB = path.join(homeDir, "project-b");
-    writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: projectA, completedCycles: 1, goal: "Fix auth flow regression" });
-    writeRunFixture(homeDir, { runId: "20260322_110000", projectDir: projectB, finished: true, goal: "Polish docs" });
+    writeRunFixture(homeDir, {
+      runId: "20260322_120000",
+      projectDir: projectA,
+      completedCycles: 1,
+      goal: "Fix auth flow regression",
+    });
+    writeRunFixture(homeDir, {
+      runId: "20260322_110000",
+      projectDir: projectB,
+      finished: true,
+      goal: "Polish docs",
+    });
     const io = captureOutput();
 
     expect(runCli(["runs", projectA])).toBe(0);
@@ -195,18 +210,52 @@ describe("runCli subcommands", () => {
     io.restore();
   });
 
+  it("prints follow-up guidance when uv upgrade fails", () => {
+    const homeDir = makeHomeDir();
+    const binDir = path.join(homeDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeExecutable(
+      path.join(binDir, "uv"),
+      `#!${process.execPath}\nprocess.stderr.write("uv explode\\n"); process.exit(2);\n`,
+    );
+    vi.stubEnv("PATH", binDir);
+    const io = captureOutput();
+
+    expect(runCli(["update"])).toBe(2);
+    expect(io.stderr()).toContain("Update failed.");
+    expect(io.stderr()).toContain("uv tool upgrade kodo --reinstall");
+    io.restore();
+  });
+
   it("builds an issue URL from a selected run", () => {
     const homeDir = makeRunsHome();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     const project = path.join(homeDir, "project");
-    writeRunFixture(homeDir, { runId: "20260322_120000", projectDir: project, completedCycles: 1, goal: "Investigate flaky auth test" });
+    writeRunFixture(homeDir, {
+      runId: "20260322_120000",
+      projectDir: project,
+      completedCycles: 1,
+      goal: "Investigate flaky auth test",
+    });
     setPromptAdapter(scriptedPrompts([""]));
     const io = captureOutput();
 
     expect(runCli(["issue", "--project", project, "--no-open"])).toBe(0);
+    expect(io.stdout()).toContain("To report this bug:");
+    expect(io.stdout()).toContain("Archive:");
+    expect(io.stdout()).toContain("Scrubbed:");
     expect(io.stdout()).toContain("Issue URL:");
-    expect(io.stdout()).toContain("Run archive:");
     expect(io.stdout()).toContain("Bug%20report%3A%20run%2020260322_120000");
+    io.restore();
+  });
+
+  it("fails issue creation when the project path is invalid", () => {
+    const io = captureOutput();
+
+    expect(runCli(["issue", "--project", path.join(makeHomeDir(), "missing"), "--no-open"])).toBe(
+      1,
+    );
+    expect(io.stderr()).toContain("Project path does not exist or is not a directory");
     io.restore();
   });
 });

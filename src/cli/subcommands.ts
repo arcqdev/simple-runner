@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
@@ -19,7 +19,7 @@ import {
 } from "../config/team-config.js";
 import { CliError } from "../core/errors.js";
 import { packRunArchive } from "../logging/archive.js";
-import { availableBackends } from "../runtime/backends.js";
+import { API_KEY_ENV_VARS, availableBackends, checkBackendStatus } from "../runtime/backends.js";
 import { getRunById, listRuns, truncateWord, type RunState } from "../logging/runs.js";
 import { VERSION } from "../core/version.js";
 import { openViewer } from "../viewer.js";
@@ -48,21 +48,6 @@ function commandOnPath(command: string): boolean {
     }
   }
   return false;
-}
-
-function commandVersion(command: string, versionArgs = ["--version"]): string | null {
-  const result = spawnSync(command, versionArgs, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.error || result.status !== 0) {
-    return null;
-  }
-  const line = `${result.stdout ?? ""}\n${result.stderr ?? ""}`
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .find((entry) => entry.length > 0);
-  return line ?? null;
 }
 
 function maskSecret(secret: string): string {
@@ -108,7 +93,11 @@ function parseLogsArgs(args: string[]): { logfile: string | null; port: number }
   return { logfile, port };
 }
 
-function parseIssueArgs(args: string[]): { noOpen: boolean; project: string; runId: string | null } {
+function parseIssueArgs(args: string[]): {
+  noOpen: boolean;
+  project: string;
+  runId: string | null;
+} {
   let noOpen = false;
   let project = ".";
   let runId: string | null = null;
@@ -150,12 +139,18 @@ function parseIssueArgs(args: string[]): { noOpen: boolean; project: string; run
 
 function launchViewerServer(port: number, logFile: string | null): string {
   if (port <= 0) {
-    throw new CliError("kodo logs --port must be a positive integer when launching HTTP viewer mode.");
+    throw new CliError(
+      "kodo logs --port must be a positive integer when launching HTTP viewer mode.",
+    );
   }
   if (!commandOnPath("npx")) {
     throw new CliError("npx is required to launch the HTTP viewer mode.");
   }
-  const viewerCliPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "viewer-cli.ts");
+  const viewerCliPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "viewer-cli.ts",
+  );
   const args = ["vite-node", viewerCliPath, "--serve", "--port", String(port)];
   if (logFile !== null) {
     args.push(logFile);
@@ -181,6 +176,35 @@ function launchViewerServer(port: number, logFile: string | null): string {
   return `http://127.0.0.1:${port}/`;
 }
 
+function openTarget(target: string): boolean {
+  if (process.env.KODO_NO_VIEWER || process.env.CI || process.env.VITEST) {
+    return false;
+  }
+
+  const platform = process.platform;
+  const command =
+    platform === "darwin"
+      ? { file: "open", args: [target] }
+      : platform === "win32"
+        ? { file: "cmd", args: ["/c", "start", "", target] }
+        : { file: "xdg-open", args: [target] };
+
+  try {
+    const child = spawn(command.file, command.args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function openFolder(folderPath: string): boolean {
+  return openTarget(folderPath);
+}
+
 function formatRunStatus(run: RunState): string {
   return run.finished ? "done" : `cycle ${run.completedCycles}/${run.maxCycles}`;
 }
@@ -193,7 +217,10 @@ function pickRun(runs: RunState[], prompt = "Select run:"): RunState | null {
     return runs[0];
   }
 
-  const choices = runs.map((run) => `${run.runId}  ${formatRunStatus(run)}  ${truncateWord(run.goal.replace(/\s+/gu, " "), 50)}`);
+  const choices = runs.map(
+    (run) =>
+      `${run.runId}  ${formatRunStatus(run)}  ${truncateWord(run.goal.replace(/\s+/gu, " "), 50)}`,
+  );
   const selected = getPromptAdapter().select(prompt, choices, choices[0]);
   if (selected === null) {
     return null;
@@ -226,7 +253,10 @@ function listTeams(homeDir = os.homedir()): void {
   }
 
   if (hasMissing) {
-    printLines(["Hint: Run 'kodo teams auto' to generate teams adapted to your installed backends.", ""]);
+    printLines([
+      "Hint: Run 'kodo teams auto' to generate teams adapted to your installed backends.",
+      "",
+    ]);
   }
 }
 
@@ -273,19 +303,24 @@ function promptAgentFields(defaults?: TeamAgentConfig): TeamAgentConfig | null {
     "gemini-cli": ["gemini-2.5-flash", "gemini-3-flash", "gemini-3-pro"],
   };
 
-  const modelChoice = prompt.select("Model", [...modelSuggestions[backend], "(custom)"], defaults?.model);
+  const modelChoice = prompt.select(
+    "Model",
+    [...modelSuggestions[backend], "(custom)"],
+    defaults?.model,
+  );
   if (modelChoice === null) {
     return null;
   }
   const model =
-    modelChoice === "(custom)"
-      ? prompt.text("Model name", defaults?.model ?? "")
-      : modelChoice;
+    modelChoice === "(custom)" ? prompt.text("Model name", defaults?.model ?? "") : modelChoice;
   if (model === null) {
     return null;
   }
 
-  const description = prompt.text("Description", defaults?.description ?? AGENT_DEFAULTS.description);
+  const description = prompt.text(
+    "Description",
+    defaults?.description ?? AGENT_DEFAULTS.description,
+  );
   if (description === null) {
     return null;
   }
@@ -348,7 +383,10 @@ function ensureAtLeastOneAgent(agents: Record<string, TeamAgentConfig>): void {
   }
 }
 
-function promptVerifiers(agentKeys: string[], defaults?: Record<string, string[]>): Record<string, string[]> | null {
+function promptVerifiers(
+  agentKeys: string[],
+  defaults?: Record<string, string[]>,
+): Record<string, string[]> | null {
   const prompt = getPromptAdapter();
   if (agentKeys.length <= 1) {
     return {
@@ -358,15 +396,27 @@ function promptVerifiers(agentKeys: string[], defaults?: Record<string, string[]
     };
   }
 
-  const testers = prompt.multiselect("Select testers (non-browser)", agentKeys, defaults?.testers ?? []);
+  const testers = prompt.multiselect(
+    "Select testers (non-browser)",
+    agentKeys,
+    defaults?.testers ?? [],
+  );
   if (testers === null) {
     return null;
   }
-  const browserTesters = prompt.multiselect("Select browser testers", agentKeys, defaults?.browser_testers ?? []);
+  const browserTesters = prompt.multiselect(
+    "Select browser testers",
+    agentKeys,
+    defaults?.browser_testers ?? [],
+  );
   if (browserTesters === null) {
     return null;
   }
-  const reviewers = prompt.multiselect("Select reviewers (architects)", agentKeys, defaults?.reviewers ?? []);
+  const reviewers = prompt.multiselect(
+    "Select reviewers (architects)",
+    agentKeys,
+    defaults?.reviewers ?? [],
+  );
   if (reviewers === null) {
     return null;
   }
@@ -381,13 +431,23 @@ function promptVerifiers(agentKeys: string[], defaults?: Record<string, string[]
 function addTeam(name: string, homeDir = os.homedir()): void {
   const existing = getTeamByName(name, homeDir);
   if (existing?.source === "user") {
-    throw new CliError(`Team '${name}' already exists at ${existing.path}\nUse 'kodo teams edit ${name}' to modify it.`);
+    throw new CliError(
+      `Team '${name}' already exists at ${existing.path}\nUse 'kodo teams edit ${name}' to modify it.`,
+    );
   }
 
   const prompt = getPromptAdapter();
   printLines([`Creating team: ${name}`, ""]);
-  const description = prompt.text("Team description", "") ?? (() => { throw new CliError("Cancelled."); })();
-  const orchestratorPrompt = prompt.text("Orchestrator prompt (empty for default)", "") ?? (() => { throw new CliError("Cancelled."); })();
+  const description =
+    prompt.text("Team description", "") ??
+    (() => {
+      throw new CliError("Cancelled.");
+    })();
+  const orchestratorPrompt =
+    prompt.text("Orchestrator prompt (empty for default)", "") ??
+    (() => {
+      throw new CliError("Cancelled.");
+    })();
 
   const agents: Record<string, TeamAgentConfig> = {};
   while (true) {
@@ -436,7 +496,9 @@ function addTeam(name: string, homeDir = os.homedir()): void {
 function editTeam(name: string, homeDir = os.homedir()): void {
   const team = getTeamByName(name, homeDir);
   if (team === null) {
-    const available = listAvailableTeams(homeDir).map((item) => `  ${item.name} (${item.source})`).join("\n");
+    const available = listAvailableTeams(homeDir)
+      .map((item) => `  ${item.name} (${item.source})`)
+      .join("\n");
     throw new CliError(`Team '${name}' not found.\nAvailable teams:\n${available}`);
   }
 
@@ -456,11 +518,24 @@ function editTeam(name: string, homeDir = os.homedir()): void {
       `  Description: ${config.description ?? ""}`,
       `  Orchestrator prompt: ${config.orchestrator_prompt ? `${config.orchestrator_prompt.slice(0, 80)}...` : "(default)"}`,
       `  Agents (${Object.keys(agents).length}):`,
-      ...Object.entries(agents).map(([agentKey, agent]) => `    ${agentKey}: ${agent.backend} / ${agent.model ?? "?"}`),
+      ...Object.entries(agents).map(
+        ([agentKey, agent]) => `    ${agentKey}: ${agent.backend} / ${agent.model ?? "?"}`,
+      ),
       "",
     ]);
 
-    const action = prompt.select("Action", ["Add agent", "Edit agent", "Remove agent", "Edit team settings", "Edit verifiers", "Save & exit"], "Save & exit");
+    const action = prompt.select(
+      "Action",
+      [
+        "Add agent",
+        "Edit agent",
+        "Remove agent",
+        "Edit team settings",
+        "Edit verifiers",
+        "Save & exit",
+      ],
+      "Save & exit",
+    );
     if (action === null) {
       throw new CliError("Cancelled.");
     }
@@ -498,7 +573,11 @@ function editTeam(name: string, homeDir = os.homedir()): void {
       agents[agentKey] = edited;
     } else if (action === "Remove agent") {
       ensureAtLeastOneAgent(agents);
-      const agentKey = prompt.select("Remove which agent?", Object.keys(agents), Object.keys(agents)[0]);
+      const agentKey = prompt.select(
+        "Remove which agent?",
+        Object.keys(agents),
+        Object.keys(agents)[0],
+      );
       if (agentKey === null) {
         throw new CliError("Cancelled.");
       }
@@ -511,7 +590,10 @@ function editTeam(name: string, homeDir = os.homedir()): void {
       if (description === null) {
         throw new CliError("Cancelled.");
       }
-      const orchestratorPrompt = prompt.text("Orchestrator prompt (empty for default)", config.orchestrator_prompt ?? "");
+      const orchestratorPrompt = prompt.text(
+        "Orchestrator prompt (empty for default)",
+        config.orchestrator_prompt ?? "",
+      );
       if (orchestratorPrompt === null) {
         throw new CliError("Cancelled.");
       }
@@ -530,7 +612,10 @@ function editTeam(name: string, homeDir = os.homedir()): void {
     } else if (action === "Save & exit") {
       ensureAtLeastOneAgent(agents);
       config.verifiers = Object.fromEntries(
-        Object.entries(verifiers).map(([role, keys]) => [role, keys.filter((key) => key in agents)]),
+        Object.entries(verifiers).map(([role, keys]) => [
+          role,
+          keys.filter((key) => key in agents),
+        ]),
       );
       const savedPath = saveTeamConfig(name, config, homeDir);
       printLines([`Saved to ${savedPath}`]);
@@ -544,17 +629,25 @@ function autoTeam(modeName: string, homeDir = os.homedir()): void {
 
   printLines([`Generated team '${modeName}' for your setup:`, ""]);
   for (const [agentKey, agentConfig] of Object.entries(config.agents)) {
-    printLines([`  ${agentKey.padEnd(20)}  ${agentConfig.backend.padEnd(12)}  ${agentConfig.model ?? ""}`]);
+    printLines([
+      `  ${agentKey.padEnd(20)}  ${agentConfig.backend.padEnd(12)}  ${agentConfig.model ?? ""}`,
+    ]);
   }
   if (skipped.length > 0) {
-    printLines(["", `  Skipped (backend missing): ${skipped.map((item) => `${item.agent} (${item.backend})`).join(", ")}`]);
+    printLines([
+      "",
+      `  Skipped (backend missing): ${skipped.map((item) => `${item.agent} (${item.backend})`).join(", ")}`,
+    ]);
   }
   printLines([""]);
 
   const destination = `${teamsDir(homeDir)}/${modeName}.json`;
   const existing = getTeamByName(modeName, homeDir);
   if (existing?.source === "user") {
-    const confirmed = getPromptAdapter().confirm(`Team '${modeName}' already exists at ${destination}. Overwrite?`, false);
+    const confirmed = getPromptAdapter().confirm(
+      `Team '${modeName}' already exists at ${destination}. Overwrite?`,
+      false,
+    );
     if (!confirmed) {
       writeStderr("Cancelled.\n");
       return;
@@ -609,11 +702,13 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
       throw new CliError(`Expected a .jsonl log file: ${resolved}`);
     }
     const viewerUrl =
-      parsed.port === 8080 ? openViewer(resolved, { openBrowser }) : launchViewerServer(parsed.port, resolved);
-    printLines([
-      `Log viewer: ${viewerUrl}`,
-      `Log file: ${resolved}`,
-    ]);
+      parsed.port === 8080
+        ? openViewer(resolved, { openBrowser })
+        : launchViewerServer(parsed.port, resolved);
+    if (parsed.port !== 8080 && openBrowser) {
+      openTarget(viewerUrl);
+    }
+    printLines([`Log viewer: ${viewerUrl}`, `Log file: ${resolved}`]);
     return;
   }
 
@@ -631,10 +726,10 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
     parsed.port === 8080
       ? openViewer(selected.logFile, { openBrowser })
       : launchViewerServer(parsed.port, selected.logFile);
-  printLines([
-    `Log viewer: ${viewerUrl}`,
-    `Log file: ${selected.logFile}`,
-  ]);
+  if (parsed.port !== 8080 && openBrowser) {
+    openTarget(viewerUrl);
+  }
+  printLines([`Log viewer: ${viewerUrl}`, `Log file: ${selected.logFile}`]);
 }
 
 function listBackendsSubcommand(): void {
@@ -651,7 +746,6 @@ function listBackendsSubcommand(): void {
     { name: "OpenAI", envVars: ["OPENAI_API_KEY"] },
     { name: "Google Gemini", envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"] },
     { name: "DeepSeek", envVars: ["DEEPSEEK_API_KEY"] },
-    { name: "Groq", envVars: ["GROQ_API_KEY"] },
     { name: "OpenRouter", envVars: ["OPENROUTER_API_KEY"] },
     { name: "Mistral", envVars: ["MISTRAL_API_KEY"] },
     { name: "xAI", envVars: ["XAI_API_KEY"] },
@@ -663,12 +757,11 @@ function listBackendsSubcommand(): void {
       lines.push(`  ${name.padEnd(12)} not found  ${installLinks[name] ?? ""}`.trimEnd());
       continue;
     }
-    const executable =
-      name === "cursor" ? "cursor-agent"
-      : name === "gemini-cli" ? "gemini"
-      : name;
-    const version = commandVersion(executable) ?? "installed";
-    lines.push(`  ${name.padEnd(12)} ${version}`);
+    const status = checkBackendStatus(name as keyof typeof backends);
+    lines.push(`  ${name.padEnd(12)} ${status.version}`);
+    if (status.warning !== null) {
+      lines.push(`  ${"".padEnd(12)} ${status.warning}`);
+    }
   }
 
   lines.push("", "API keys:");
@@ -681,7 +774,19 @@ function listBackendsSubcommand(): void {
       lines.push(`  ${provider.name.padEnd(22)} not set  (${provider.envVars.join(", ")})`);
       continue;
     }
-    lines.push(`  ${provider.name.padEnd(22)} set via ${hit} (${maskSecret(process.env[hit] ?? "")})`);
+    lines.push(
+      `  ${provider.name.padEnd(22)} set via ${hit} (${maskSecret(process.env[hit] ?? "")})`,
+    );
+  }
+
+  for (const envVar of API_KEY_ENV_VARS) {
+    if (apiProviders.some((provider) => provider.envVars.includes(envVar))) {
+      continue;
+    }
+    const value = process.env[envVar];
+    if (typeof value === "string" && value.trim().length > 0) {
+      lines.push(`  ${envVar.padEnd(22)} set (${maskSecret(value)})`);
+    }
   }
 
   printLines(lines);
@@ -699,6 +804,11 @@ function updateSubcommand(): number {
   if (result.error) {
     throw new CliError(`Failed to run uv: ${result.error.message}`);
   }
+  if ((result.status ?? 1) !== 0) {
+    writeStderr(
+      "Update failed. Fix the uv/tooling error above, then rerun: uv tool upgrade kodo --reinstall\n",
+    );
+  }
   return result.status ?? 1;
 }
 
@@ -709,41 +819,93 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
   }
 
   const projectDir = path.resolve(parsed.project);
+  if (!existsSync(projectDir) || !statSync(projectDir).isDirectory()) {
+    throw new CliError(`Project path does not exist or is not a directory: ${projectDir}`);
+  }
   const selected =
     parsed.runId !== null
       ? getRunById(parsed.runId, homeDir)
       : pickRun(listRuns(projectDir, homeDir), "Select run to report:");
 
   if (selected === null) {
-    throw new CliError(parsed.runId !== null ? `Run not found: ${parsed.runId}` : "No runs found. Specify a run ID or run kodo first.");
+    throw new CliError(
+      parsed.runId !== null
+        ? `Run not found: ${parsed.runId}`
+        : "No runs found. Specify a run ID or run kodo first.",
+    );
   }
 
-  const description = getPromptAdapter().text("Describe what went wrong (leave empty if obvious)", "") ?? "";
-  const status = selected.finished ? "done" : `interrupted at cycle ${selected.completedCycles}/${selected.maxCycles}`;
+  const description =
+    getPromptAdapter().text(
+      "Describe what went wrong (leave empty if crash/error is obvious):",
+      "",
+    ) ?? "";
+  const status = selected.finished
+    ? "done"
+    : `interrupted at cycle ${selected.completedCycles}/${selected.maxCycles}`;
   const runDir = path.dirname(selected.logFile);
-  const archivePath = packRunArchive(runDir);
+  const archive = packRunArchive(runDir);
+  const archivePath = archive?.path ?? null;
   const body = [
     `**Run:** ${selected.runId}`,
     `**Goal:** ${selected.goal.slice(0, 500)}${selected.goal.length > 500 ? "..." : ""}`,
     `**Status:** ${status}`,
     `**kodo:** ${VERSION}`,
-    `**Log file:** ${selected.logFile}`,
-    ...(archivePath === null ? [] : ["", `Attach the generated run archive from \`${archivePath}\`.`]),
     "",
-    description.trim(),
+    ...(description.trim().length === 0 ? [] : [description.trim(), ""]),
+    "---",
+    "",
+    ...(archivePath === null
+      ? []
+      : [
+          `**[TODO] Please attach the run archive:** drag and drop \`run.tar.gz\` from the folder that opened (or from \`~/.kodo/runs/${selected.runId}/\`) into this issue. The archive contains log, config, goal, and conversations essential for debugging.`,
+          "",
+          "The archive is scrubbed for common secrets and PII, but still verify it manually before submitting.",
+        ]),
   ]
     .filter((line) => line.length > 0)
     .join("\n");
 
   const url = `https://github.com/ikamensh/kodo/issues/new?title=${encodeURIComponent(`Bug report: run ${selected.runId}`)}&body=${encodeURIComponent(body)}`;
+  const folderOpened = !parsed.noOpen && openFolder(runDir);
+  const browserOpened = !parsed.noOpen && openTarget(url);
 
-  const lines = ["Issue URL:", url];
-  if (archivePath !== null) {
-    lines.push("", `Run archive: ${archivePath}`);
-  }
+  const lines: string[] = [];
   if (!parsed.noOpen) {
-    lines.push("", "Open the URL in your browser and attach the run artifacts manually.");
+    lines.push("");
+    if (browserOpened) {
+      lines.push("  GitHub issue form opened in your browser.");
+    } else {
+      lines.push("  Open the URL below in your browser.");
+    }
+    if (archivePath !== null) {
+      lines.push(
+        folderOpened
+          ? "  Run folder opened - attach run.tar.gz to the issue (drag and drop or click to add)."
+          : `  Attach run.tar.gz from ${runDir} (drag and drop or click to add).`,
+      );
+      lines.push("  Archive scrubbed for common secrets/PII; verify manually before submitting.");
+    }
+  } else {
+    lines.push(
+      "",
+      "  To report this bug:",
+      "  1. Open the URL below in your browser",
+      ...(archivePath === null
+        ? []
+        : [
+            "  2. Attach run.tar.gz from the run folder (drag and drop or click to add)",
+            "  3. Archive scrubbed for common secrets/PII; verify manually before submitting",
+          ]),
+    );
   }
+  if (archivePath !== null) {
+    lines.push("", `  Archive: ${archivePath}`);
+    lines.push(
+      `  Scrubbed: ${archive?.stats.redactions ?? 0} sensitive values across ${archive?.stats.filesChanged ?? 0} file(s)`,
+    );
+  }
+  lines.push("", "  Issue URL:", `  ${url}`);
   printLines(lines);
 }
 

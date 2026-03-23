@@ -89,6 +89,16 @@ function printVersion(): void {
   printLines([`kodo ${VERSION}`]);
 }
 
+function printBanner(projectDir: string): void {
+  printLines([
+    "",
+    `  kodo v${VERSION} - autonomous multi-agent coding`,
+    "  https://github.com/ikamensh/kodo",
+    "",
+    `  Project: ${projectDir}`,
+  ]);
+}
+
 function normalizeGoalText(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
@@ -143,6 +153,23 @@ function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
   }
 
   return { goalText: readInteractiveGoal(), source: "interactive" };
+}
+
+function printNextSteps(runDir: RunDir, goal: ResolvedGoal): void {
+  const lines = ["", `  View run: kodo-viewer ${runDir.logFile}`];
+  if (goal.source === "improve" && existsSync(path.join(runDir.root, "improve-report.md"))) {
+    lines.push(`  Improve report: ${path.join(runDir.root, "improve-report.md")}`);
+  }
+  if (
+    (goal.source === "test" || goal.source === "fix-from") &&
+    existsSync(path.join(runDir.root, "test-report.md"))
+  ) {
+    lines.push(`  Test report: ${path.join(runDir.root, "test-report.md")}`);
+  }
+  if (goal.source === "improve" || goal.source === "test" || goal.source === "fix-from") {
+    lines.push(`  Fix follow-ups: kodo --fix-from ${runDir.runId}`);
+  }
+  printLines(lines);
 }
 
 function resolveFixFromGoal(parsed: ParsedMain): ResolvedGoal {
@@ -382,6 +409,9 @@ function summarizeReport(
 
 function summarizeMainInvocation(parsed: ParsedMain): void {
   const { goal, notices, params, runDir } = createPendingRun(parsed);
+  if (!parsed.flags.json) {
+    printBanner(parsed.flags.project);
+  }
   const result = executePendingRun(runDir, params, goal, parsed.flags);
   const reportSummary = summarizeReport(runDir, goal, parsed.flags.json);
   const stages = existsSync(runDir.goalPlanFile)
@@ -450,6 +480,7 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
     ...(goal.goalText === null ? [] : [`Goal: ${goal.goalText.replace(/\s+/gu, " ").trim()}`]),
     `Summary: ${result.summary}`,
   ]);
+  printNextSteps(runDir, goal);
 }
 
 function resolveResumeRun(parsed: ParsedMain): { logFile: string; runId: string } {
@@ -557,6 +588,7 @@ export function runCli(argv = process.argv.slice(2)): number {
           summary: result.summary,
         });
       } else {
+        printBanner(parsed.flags.project);
         printLines([
           result.message,
           "",
@@ -564,6 +596,7 @@ export function runCli(argv = process.argv.slice(2)): number {
           `Log file: ${run.logFile}`,
           `Summary: ${result.summary}`,
         ]);
+        printLines(["", `  View run: kodo-viewer ${run.logFile}`]);
       }
       return 0;
     }

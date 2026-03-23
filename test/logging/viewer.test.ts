@@ -9,7 +9,10 @@ import { writeRunFixture } from "../helpers/runs.js";
 import { captureOutput } from "../helpers/stdout.js";
 
 function makeTempDir(): string {
-  const directory = path.join(os.tmpdir(), `kodo-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const directory = path.join(
+    os.tmpdir(),
+    `kodo-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(directory, { recursive: true });
   return directory;
 }
@@ -45,7 +48,11 @@ describe("viewer", () => {
   it("skips browser launching in test environments", () => {
     const directory = makeTempDir();
     const logFile = path.join(directory, "log.jsonl");
-    writeFileSync(logFile, `${JSON.stringify({ ts: "2026-03-23T00:00:00Z", t: 0, event: "run_start" })}\n`, "utf8");
+    writeFileSync(
+      logFile,
+      `${JSON.stringify({ ts: "2026-03-23T00:00:00Z", t: 0, event: "run_start" })}\n`,
+      "utf8",
+    );
     vi.stubEnv("VITEST", "true");
 
     expect(() => openViewer(logFile)).not.toThrow();
@@ -105,7 +112,7 @@ describe("viewer", () => {
       const logResponse = await fetch(`${server.url}api/log/20260323_010203`);
       expect(logResponse.ok).toBe(true);
       const body = await logResponse.text();
-      expect(body).toContain("\"event\":\"run_start\"");
+      expect(body).toContain('"event":"run_start"');
 
       const invalidResponse = await fetch(`${server.url}api/log/%2E%2E%2Fwat`);
       expect(invalidResponse.status).toBe(400);
@@ -120,5 +127,19 @@ describe("viewer", () => {
     await expect(runViewerCli(["--help"])).resolves.toBe(0);
     expect(io.stdout()).toContain("Usage: kodo-viewer");
     io.restore();
+  });
+
+  it("prints the audited port-collision hint in serve mode", async () => {
+    const occupied = await serveViewer(0, { openBrowser: false });
+    const io = captureOutput();
+
+    try {
+      await expect(runViewerCli(["--serve", "--port", String(occupied.port)])).resolves.toBe(1);
+      expect(io.stderr()).toContain("Hint: try a different port with --port");
+      expect(io.stderr()).toContain(String(occupied.port + 1));
+    } finally {
+      io.restore();
+      await occupied.close();
+    }
   });
 });
