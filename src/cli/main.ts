@@ -12,7 +12,24 @@ import { findIncompleteRuns, getRunById, runsRoot } from "../logging/runs.js";
 import { executePendingRun, resumeRun } from "../runtime/engine.js";
 import { parseMainArgs, isHandledAsSubcommand } from "./params.js";
 import { getPromptAdapter } from "./prompts.js";
-import { loadOrResolveRuntimeParams, resolveGoal, type ResolvedGoal, type ResolvedRuntimeParams } from "./runtime.js";
+import {
+  buildImproveFallbackPlan,
+  buildTestFallbackPlan,
+  collectPriorNeedsDecision,
+  collectPriorTestWork,
+  extractFixableFindings,
+  extractSection,
+  formatImproveGoal,
+  formatTestGoal,
+  parseTestReportSummary,
+  type SpecializedGoalPlan,
+} from "./specialized.js";
+import {
+  loadOrResolveRuntimeParams,
+  resolveGoal,
+  type ResolvedGoal,
+  type ResolvedRuntimeParams,
+} from "./runtime.js";
 import { handleSubcommand } from "./subcommands.js";
 import type { ParsedMain } from "./types.js";
 import { emitJson, printLines, writeStderr } from "./ui.js";
@@ -97,33 +114,6 @@ function readInteractiveGoal(): string {
   return normalizeGoalText(fallback);
 }
 
-function extractSection(report: string, heading: string): string {
-  const lines = report.split(/\r?\n/gu);
-  const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
-  if (start === -1) {
-    return "";
-  }
-
-  const body: string[] = [];
-  for (let index = start + 1; index < lines.length; index += 1) {
-    if (lines[index].startsWith("## ")) {
-      break;
-    }
-    body.push(lines[index]);
-  }
-  return body.join("\n").trim();
-}
-
-function extractFindingsFromReport(report: string): string[] {
-  const sections = ["Critical Findings", "Integration & Workflow Findings", "Usability Gaps", "Needs decision"];
-  return sections.flatMap((section) =>
-    extractSection(report, section)
-      .split(/\r?\n/gu)
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith("- ")),
-  );
-}
-
 function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
   const prompt = getPromptAdapter();
   const projectGoalFile = path.join(projectDir, "goal.md");
@@ -168,7 +158,7 @@ function resolveFixFromGoal(parsed: ParsedMain): ResolvedGoal {
       continue;
     }
     const content = readFileSync(reportPath, "utf8");
-    const findings = extractFindingsFromReport(content);
+    const findings = extractFixableFindings(content);
     if (findings.length === 0) {
       continue;
     }
@@ -189,39 +179,70 @@ function resolveFixFromGoal(parsed: ParsedMain): ResolvedGoal {
   throw new CliError(`No test or improve report with fixable findings found in run ${runId}`);
 }
 
-function buildModeGoal(parsed: ParsedMain, runDir: RunDir): ResolvedGoal {
+function buildModeGoal(
+  parsed: ParsedMain,
+  runDir: RunDir,
+): {
+  goal: ResolvedGoal;
+  notices: string[];
+  plan: SpecializedGoalPlan | null;
+} {
   if (parsed.flags.improve) {
     const reportPath = path.join(runDir.root, "improve-report.md");
-    const focusLine = parsed.flags.focus ? `\n\nFocus area: ${parsed.flags.focus}` : "";
+    const prior = collectPriorNeedsDecision(runDir);
+    const notices = [
+      ...(prior.length > 0 ? ["Carrying forward prior 'Needs decision' items."] : []),
+      ...(parsed.flags.focus === null ? [] : [`Focus: ${parsed.flags.focus}`]),
+      ...(parsed.flags.debug ? ["Debug mode; using default improve plan."] : []),
+    ];
     return {
-      goalText: normalizeGoalText(
-        `Review this project for simplification, usability, and architecture improvements. Write the report to ${reportPath}.${focusLine}`,
-      ),
-      source: "improve",
+      goal: {
+        goalText: normalizeGoalText(formatImproveGoal(reportPath, parsed.flags.focus)),
+        source: "improve",
+      },
+      notices,
+      plan: buildImproveFallbackPlan(reportPath, prior, parsed.flags.focus),
     };
   }
 
   if (parsed.flags.test) {
     const reportPath = path.join(runDir.root, "test-report.md");
-    const focusLine = parsed.flags.focus ? `\n\nFocus area: ${parsed.flags.focus}` : "";
-    const targetLine = parsed.flags.target.length > 0 ? `\n\nTargets: ${parsed.flags.target.join(", ")}` : "";
+    const prior = collectPriorTestWork(runDir);
+    const notices = [
+      ...(prior.length > 0 ? ["Carrying forward context from prior test runs."] : []),
+      ...(parsed.flags.focus === null ? [] : [`Focus: ${parsed.flags.focus}`]),
+      ...(parsed.flags.target.length === 0 ? [] : [`Targets: ${parsed.flags.target.join(", ")}`]),
+      ...(parsed.flags.debug ? ["Debug mode; using default test plan."] : []),
+    ];
     return {
-      goalText: normalizeGoalText(
-        `Test this project through realistic workflows, edge cases, and regressions. Write the report to ${reportPath}.${focusLine}${targetLine}`,
-      ),
-      source: "test",
+      goal: {
+        goalText: normalizeGoalText(
+          formatTestGoal(reportPath, parsed.flags.focus, parsed.flags.target),
+        ),
+        source: "test",
+      },
+      notices,
+      plan: buildTestFallbackPlan(reportPath, {
+        focus: parsed.flags.focus,
+        priorTestWork: prior,
+        targets: parsed.flags.target,
+      }),
     };
   }
 
   if (parsed.flags.fixFrom !== null) {
-    return resolveFixFromGoal(parsed);
+    return { goal: resolveFixFromGoal(parsed), notices: [], plan: null };
   }
 
   const goal = resolveGoal(parsed.flags);
   if (goal.goalText !== null) {
-    return { ...goal, goalText: normalizeGoalText(goal.goalText) };
+    return {
+      goal: { ...goal, goalText: normalizeGoalText(goal.goalText) },
+      notices: [],
+      plan: null,
+    };
   }
-  return resolveInteractiveGoal(parsed.flags.project);
+  return { goal: resolveInteractiveGoal(parsed.flags.project), notices: [], plan: null };
 }
 
 function teamAgentNames(teamName: string, projectDir: string): string[] {
@@ -229,11 +250,19 @@ function teamAgentNames(teamName: string, projectDir: string): string[] {
   return team === null ? [] : Object.keys(team.config.agents);
 }
 
-function writeRunArtifacts(runDir: RunDir, params: ResolvedRuntimeParams, goal: ResolvedGoal): void {
+function writeRunArtifacts(
+  runDir: RunDir,
+  params: ResolvedRuntimeParams,
+  goal: ResolvedGoal,
+  plan: SpecializedGoalPlan | null,
+): void {
   writeFileSync(runDir.configFile, `${JSON.stringify(params, null, 2)}\n`, "utf8");
   writeFileSync(runDir.goalFile, `${goal.goalText ?? ""}\n`, "utf8");
   if (goal.source !== "interactive") {
     writeFileSync(runDir.goalRefinedFile, `${goal.goalText ?? ""}\n`, "utf8");
+  }
+  if (plan !== null) {
+    writeFileSync(runDir.goalPlanFile, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   }
 
   const team = getTeamByName(params.team, undefined, runDir.projectDir);
@@ -244,24 +273,25 @@ function writeRunArtifacts(runDir: RunDir, params: ResolvedRuntimeParams, goal: 
 
 function createPendingRun(parsed: ParsedMain): {
   goal: ResolvedGoal;
+  notices: string[];
   params: ResolvedRuntimeParams;
   runDir: RunDir;
 } {
   const params = loadOrResolveRuntimeParams(parsed.flags);
   const runDir = RunDir.create(parsed.flags.project);
-  const goal = buildModeGoal(parsed, runDir);
-  writeRunArtifacts(runDir, params, goal);
+  const { goal, notices, plan } = buildModeGoal(parsed, runDir);
+  writeRunArtifacts(runDir, params, goal, plan);
   initLog(runDir);
   emitLogEvent("cli_args", {
     ...params,
     debug: parsed.flags.debug,
     goal_text: goal.goalText,
-    has_plan: false,
+    has_plan: plan !== null,
     project_dir: parsed.flags.project,
   });
   emitLogEvent("run_start", {
     goal: goal.goalText,
-    has_stages: false,
+    has_stages: plan !== null,
     max_cycles: params.maxCycles,
     max_exchanges: params.maxExchanges,
     model: params.orchestratorModel,
@@ -273,16 +303,110 @@ function createPendingRun(parsed: ParsedMain): {
     emitLogEvent("debug_run_start");
   }
 
-  return { goal, params, runDir };
+  return { goal, notices, params, runDir };
+}
+
+function summarizeReport(
+  runDir: RunDir,
+  goal: ResolvedGoal,
+  jsonMode: boolean,
+): Record<string, unknown> {
+  if (goal.source === "improve") {
+    const reportPath = path.join(runDir.root, "improve-report.md");
+    if (!existsSync(reportPath)) {
+      return {};
+    }
+    const reportContent = readFileSync(reportPath, "utf8");
+    const autoFixed = (extractSection(reportContent, "Auto-fixed").match(/^- .+$/gmu) ?? []).length;
+    const needsDecision = (extractSection(reportContent, "Needs decision").match(/^- .+$/gmu) ?? [])
+      .length;
+
+    if (!jsonMode) {
+      printLines([
+        "",
+        "=".repeat(50),
+        `Improve report: ${reportPath}`,
+        `  Auto-fixed:     ${autoFixed}`,
+        `  Needs decision: ${needsDecision}`,
+        ...(needsDecision > 0
+          ? ["", "  To fix 'needs decision' items:", `    kodo --fix-from ${runDir.runId}`]
+          : []),
+      ]);
+    }
+
+    return {
+      improve_report: reportContent,
+      improve_report_summary: {
+        auto_fixed: autoFixed,
+        needs_decision: needsDecision,
+      },
+    };
+  }
+
+  if (goal.source === "test" || goal.source === "fix-from") {
+    const reportPath = path.join(runDir.root, "test-report.md");
+    if (!existsSync(reportPath)) {
+      return {};
+    }
+    const reportContent = readFileSync(reportPath, "utf8");
+    const summary = parseTestReportSummary(reportContent);
+    const fixable = (summary.findings_count ?? summary.findings_item_count) - summary.blocked_count;
+
+    if (!jsonMode) {
+      printLines([
+        "",
+        "=".repeat(50),
+        `Test report: ${reportPath}`,
+        ...((summary.findings_count ?? 0) > 0
+          ? [`  Findings:         ${summary.findings_count}`]
+          : []),
+        ...((summary.regression_tests ?? summary.regression_count) > 0
+          ? [`  Regression tests: ${summary.regression_tests ?? summary.regression_count}`]
+          : []),
+        ...(summary.blocked_count > 0 ? [`  Blocked:          ${summary.blocked_count}`] : []),
+        ...summary.blocked_details.map((detail) => `    ${detail}`),
+        ...(fixable > 0
+          ? ["", "  To fix these findings:", `    kodo --fix-from ${runDir.runId}`]
+          : []),
+      ]);
+    }
+
+    return {
+      test_report: reportContent,
+      test_report_summary: summary,
+    };
+  }
+
+  return {};
 }
 
 function summarizeMainInvocation(parsed: ParsedMain): void {
-  const { goal, params, runDir } = createPendingRun(parsed);
+  const { goal, notices, params, runDir } = createPendingRun(parsed);
   const result = executePendingRun(runDir, params, goal, parsed.flags);
+  const reportSummary = summarizeReport(runDir, goal, parsed.flags.json);
+  const stages = existsSync(runDir.goalPlanFile)
+    ? (
+        (
+          JSON.parse(readFileSync(runDir.goalPlanFile, "utf8")) as {
+            stages?: SpecializedGoalPlan["stages"];
+          }
+        ).stages ?? []
+      ).map((stage) => ({
+        cycles: 0,
+        finished: true,
+        index: stage.index,
+        name: stage.name,
+        summary: stage.description,
+      }))
+    : [];
   const summary = {
     status: result.finished ? "completed" : "partial",
+    cost_usd: 0,
     command: parsed.command,
+    cycles: result.cyclesCompleted,
     cycles_completed: result.cyclesCompleted,
+    exchanges: result.cyclesCompleted,
+    finished: result.finished,
     goal_source: goal.source,
     goal_text: goal.goalText,
     params,
@@ -291,9 +415,11 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
     report_path: result.artifacts.reportPath,
     run_id: runDir.runId,
     run_root: runDir.root,
+    stages,
     summary: result.summary,
     targets: parsed.flags.target,
     message: result.message,
+    ...reportSummary,
   };
 
   if (parsed.flags.json) {
@@ -302,6 +428,8 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
   }
 
   printLines([
+    ...notices.map((notice) => `  ${notice}`),
+    ...(notices.length > 0 ? [""] : []),
     result.message,
     "",
     `Run ID: ${runDir.runId}`,
@@ -313,7 +441,9 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
     `Orchestrator: ${params.orchestrator} (${params.orchestratorModel})`,
     `Budget: ${params.maxExchanges} exchanges/cycle, ${params.maxCycles} cycles`,
     `Auto-commit: ${params.autoCommit ? "enabled" : "disabled"}`,
-    ...(result.artifacts.reportPath === null ? [] : [`Report path: ${result.artifacts.reportPath}`]),
+    ...(result.artifacts.reportPath === null
+      ? []
+      : [`Report path: ${result.artifacts.reportPath}`]),
     ...(parsed.flags.focus === null ? [] : [`Focus: ${parsed.flags.focus}`]),
     ...(parsed.flags.target.length === 0 ? [] : [`Targets: ${parsed.flags.target.join(", ")}`]),
     `Goal source: ${goal.source}`,
@@ -333,7 +463,9 @@ function resolveResumeRun(parsed: ParsedMain): { logFile: string; runId: string 
       return { logFile: runs[0].logFile, runId: runs[0].runId };
     }
 
-    const choices = runs.map((run) => `${run.runId}  ${run.goal.replace(/\s+/gu, " ").slice(0, 50)}`);
+    const choices = runs.map(
+      (run) => `${run.runId}  ${run.goal.replace(/\s+/gu, " ").slice(0, 50)}`,
+    );
     const selected = getPromptAdapter().select("Select run to resume:", choices, choices[0]);
     if (selected === null) {
       throw new CliError("Cancelled.");
@@ -392,7 +524,8 @@ export function runCli(argv = process.argv.slice(2)): number {
       return result;
     }
 
-    const rewritten = first === "test" || first === "improve" ? [`--${first}`, ...argv.slice(1)] : argv;
+    const rewritten =
+      first === "test" || first === "improve" ? [`--${first}`, ...argv.slice(1)] : argv;
     const parsed = parseMainArgs(rewritten);
 
     if (parsed.flags.version) {
