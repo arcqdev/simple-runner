@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
+import { resetDotEnvForTests } from "../../src/config/dotenv.js";
 import { scriptedPrompts } from "../helpers/prompts.js";
 import { makeRunsHome, writeRunFixture } from "../helpers/runs.js";
 import { captureOutput } from "../helpers/stdout.js";
@@ -17,6 +18,7 @@ function makeProjectDir(): string {
 }
 
 afterEach(() => {
+  resetDotEnvForTests();
   vi.restoreAllMocks();
   setPromptAdapter(null);
 });
@@ -46,6 +48,7 @@ describe("runCli main shell", () => {
 
     expect(runCli(["test", "--project", project])).toBe(0);
     expect(io.stdout()).toContain("Mode: test");
+    expect(io.stdout()).toContain("Run completed.");
     io.restore();
   });
 
@@ -102,6 +105,7 @@ describe("runCli main shell", () => {
     expect(io.stdout()).toContain("Mode: test");
     expect(io.stdout()).toContain(`Project: ${project}`);
     expect(io.stdout()).toContain("Targets: src");
+    expect(io.stdout()).toContain("Summary:");
     io.restore();
   });
 
@@ -159,6 +163,7 @@ describe("runCli main shell", () => {
 
     expect(runCli(["--resume", "--project", project])).toBe(0);
     expect(io.stdout()).toContain("Run ID: 20260322_120000");
+    expect(io.stdout()).toContain("Run completed.");
     io.restore();
   });
 
@@ -173,6 +178,7 @@ describe("runCli main shell", () => {
 
     expect(runCli(["--resume", "--project", project])).toBe(0);
     expect(io.stdout()).toContain("Run ID: 20260322_121000");
+    expect(io.stdout()).toContain("Summary:");
     io.restore();
   });
 });

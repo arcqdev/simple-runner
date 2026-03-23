@@ -31,7 +31,7 @@ export type TeamConfig = {
 
 export type TeamListing = {
   name: string;
-  source: "built-in" | "user";
+  source: "built-in" | "project" | "user";
   config: TeamConfig;
   path: string;
 };
@@ -64,6 +64,10 @@ export function teamsDir(homeDir = os.homedir()): string {
   const result = path.join(homeDir, ".kodo", "teams");
   mkdirSync(result, { recursive: true });
   return result;
+}
+
+export function projectTeamConfigPath(projectDir: string): string {
+  return path.join(projectDir, ".kodo", "team.json");
 }
 
 function deepClone<T>(value: T): T {
@@ -124,7 +128,21 @@ export function listAvailableTeams(homeDir = os.homedir()): TeamListing[] {
   return [...teams.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function getTeamByName(name: string, homeDir = os.homedir()): TeamListing | null {
+export function getTeamByName(name: string, homeDir = os.homedir(), projectDir?: string): TeamListing | null {
+  if (projectDir !== undefined) {
+    const projectPath = projectTeamConfigPath(projectDir);
+    try {
+      return {
+        name,
+        source: "project",
+        config: loadTeamConfigFile(projectPath),
+        path: projectPath,
+      };
+    } catch {
+      // Fall through to user/built-in lookup when the project override is absent or invalid.
+    }
+  }
+
   return listAvailableTeams(homeDir).find((team) => team.name === name) ?? null;
 }
 

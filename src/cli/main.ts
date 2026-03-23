@@ -3,11 +3,13 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { loadDotEnv } from "../config/dotenv.js";
 import { getTeamByName } from "../config/team-config.js";
 import { CliError, EXIT_ERROR } from "../core/errors.js";
 import { emit as emitLogEvent, init as initLog, RunDir } from "../logging/log.js";
 import { VERSION } from "../core/version.js";
 import { findIncompleteRuns, getRunById, runsRoot } from "../logging/runs.js";
+import { executePendingRun, resumeRun } from "../runtime/engine.js";
 import { parseMainArgs, isHandledAsSubcommand } from "./params.js";
 import { getPromptAdapter } from "./prompts.js";
 import { loadOrResolveRuntimeParams, resolveGoal, type ResolvedGoal, type ResolvedRuntimeParams } from "./runtime.js";
@@ -78,6 +80,23 @@ function normalizeGoalText(text: string): string {
   return trimmed;
 }
 
+function readInteractiveGoal(): string {
+  const prompt = getPromptAdapter();
+  const guided = prompt.multiline?.("What's your goal? (Empty line to finish, paste-friendly)");
+  if (guided === null) {
+    throw new CliError("Cancelled.");
+  }
+  if (guided !== undefined) {
+    return normalizeGoalText(guided);
+  }
+
+  const fallback = prompt.text("Goal");
+  if (fallback === null) {
+    throw new CliError("Cancelled.");
+  }
+  return normalizeGoalText(fallback);
+}
+
 function extractSection(report: string, heading: string): string {
   const lines = report.split(/\r?\n/gu);
   const start = lines.findIndex((line) => line.trim() === `## ${heading}`);
@@ -111,7 +130,15 @@ function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
   if (existsSync(projectGoalFile)) {
     try {
       const content = normalizeGoalText(readFileSync(projectGoalFile, "utf8"));
-      const useExisting = prompt.confirm(`Use existing goal from ${projectGoalFile}?`, true);
+      printLines([
+        "",
+        `Found existing goal in ${projectGoalFile}:`,
+        "----------------------------------------",
+        content.slice(0, 500),
+        ...(content.length > 500 ? ["..."] : []),
+        "----------------------------------------",
+      ]);
+      const useExisting = prompt.confirm("Use this goal?", true);
       if (useExisting === null) {
         throw new CliError("Cancelled.");
       }
@@ -125,11 +152,7 @@ function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
     }
   }
 
-  const goalText = prompt.text("Goal");
-  if (goalText === null) {
-    throw new CliError("Cancelled.");
-  }
-  return { goalText: normalizeGoalText(goalText), source: "interactive" };
+  return { goalText: readInteractiveGoal(), source: "interactive" };
 }
 
 function resolveFixFromGoal(parsed: ParsedMain): ResolvedGoal {
@@ -201,8 +224,8 @@ function buildModeGoal(parsed: ParsedMain, runDir: RunDir): ResolvedGoal {
   return resolveInteractiveGoal(parsed.flags.project);
 }
 
-function teamAgentNames(teamName: string): string[] {
-  const team = getTeamByName(teamName);
+function teamAgentNames(teamName: string, projectDir: string): string[] {
+  const team = getTeamByName(teamName, undefined, projectDir);
   return team === null ? [] : Object.keys(team.config.agents);
 }
 
@@ -213,7 +236,7 @@ function writeRunArtifacts(runDir: RunDir, params: ResolvedRuntimeParams, goal: 
     writeFileSync(runDir.goalRefinedFile, `${goal.goalText ?? ""}\n`, "utf8");
   }
 
-  const team = getTeamByName(params.team);
+  const team = getTeamByName(params.team, undefined, runDir.projectDir);
   if (team !== null) {
     writeFileSync(runDir.teamFile, `${JSON.stringify(team.config, null, 2)}\n`, "utf8");
   }
@@ -244,7 +267,7 @@ function createPendingRun(parsed: ParsedMain): {
     model: params.orchestratorModel,
     orchestrator: params.orchestrator,
     project_dir: parsed.flags.project,
-    team: teamAgentNames(params.team),
+    team: teamAgentNames(params.team, parsed.flags.project),
   });
   if (parsed.flags.debug) {
     emitLogEvent("debug_run_start");
@@ -255,24 +278,22 @@ function createPendingRun(parsed: ParsedMain): {
 
 function summarizeMainInvocation(parsed: ParsedMain): void {
   const { goal, params, runDir } = createPendingRun(parsed);
-  const reportPath = parsed.flags.improve
-    ? path.join(runDir.root, "improve-report.md")
-    : parsed.flags.test
-      ? path.join(runDir.root, "test-report.md")
-      : null;
+  const result = executePendingRun(runDir, params, goal, parsed.flags);
   const summary = {
-    status: "pending",
+    status: result.finished ? "completed" : "partial",
     command: parsed.command,
+    cycles_completed: result.cyclesCompleted,
     goal_source: goal.source,
     goal_text: goal.goalText,
     params,
     focus: parsed.flags.focus,
     log_file: runDir.logFile,
-    report_path: reportPath,
+    report_path: result.artifacts.reportPath,
     run_id: runDir.runId,
     run_root: runDir.root,
+    summary: result.summary,
     targets: parsed.flags.target,
-    message: "Pending run scaffold created.",
+    message: result.message,
   };
 
   if (parsed.flags.json) {
@@ -281,7 +302,7 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
   }
 
   printLines([
-    "Pending run scaffold created.",
+    result.message,
     "",
     `Run ID: ${runDir.runId}`,
     `Run dir: ${runDir.root}`,
@@ -292,11 +313,12 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
     `Orchestrator: ${params.orchestrator} (${params.orchestratorModel})`,
     `Budget: ${params.maxExchanges} exchanges/cycle, ${params.maxCycles} cycles`,
     `Auto-commit: ${params.autoCommit ? "enabled" : "disabled"}`,
-    ...(reportPath === null ? [] : [`Report path: ${reportPath}`]),
+    ...(result.artifacts.reportPath === null ? [] : [`Report path: ${result.artifacts.reportPath}`]),
     ...(parsed.flags.focus === null ? [] : [`Focus: ${parsed.flags.focus}`]),
     ...(parsed.flags.target.length === 0 ? [] : [`Targets: ${parsed.flags.target.join(", ")}`]),
     `Goal source: ${goal.source}`,
     ...(goal.goalText === null ? [] : [`Goal: ${goal.goalText.replace(/\s+/gu, " ").trim()}`]),
+    `Summary: ${result.summary}`,
   ]);
 }
 
@@ -351,6 +373,7 @@ function emitError(error: unknown, jsonMode: boolean): number {
 }
 
 export function runCli(argv = process.argv.slice(2)): number {
+  loadDotEnv();
   const jsonMode = argv.includes("--json");
 
   try {
@@ -391,19 +414,22 @@ export function runCli(argv = process.argv.slice(2)): number {
 
     if (parsed.command === "resume") {
       const run = resolveResumeRun(parsed);
+      const result = resumeRun(run);
       if (parsed.flags.json) {
         emitJson({
           log_file: run.logFile,
           run_id: run.runId,
-          status: "pending",
-          message: "Resume target resolved.",
+          status: result.finished ? "completed" : "partial",
+          message: result.message,
+          summary: result.summary,
         });
       } else {
         printLines([
-          "Resume target resolved.",
+          result.message,
           "",
           `Run ID: ${run.runId}`,
           `Log file: ${run.logFile}`,
+          `Summary: ${result.summary}`,
         ]);
       }
       return 0;

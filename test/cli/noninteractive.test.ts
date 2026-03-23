@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
+import { resetDotEnvForTests } from "../../src/config/dotenv.js";
 import { projectConfigPath } from "../../src/config/project-config.js";
 import { clearUserConfigCache } from "../../src/config/user-config.js";
 import { getRunById, runsRoot } from "../../src/logging/runs.js";
@@ -38,6 +39,7 @@ function makeHomeDir(): string {
 
 afterEach(() => {
   clearUserConfigCache();
+  resetDotEnvForTests();
   setPromptAdapter(null);
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -59,6 +61,7 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Orchestrator: api (gpt-5.4)");
     expect(io.stdout()).toContain("Run ID:");
     expect(io.stdout()).toContain("Log file:");
+    expect(io.stdout()).toContain("Run completed.");
 
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "full",
@@ -106,6 +109,32 @@ describe("runCli noninteractive runtime resolution", () => {
     io.restore();
   });
 
+  it("loads provider credentials from a cwd .env file at startup", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    for (const key of API_KEY_ENV_VARS.filter((value) => value !== "OPENAI_API_KEY")) {
+      vi.stubEnv(key, "");
+    }
+    const previousOpenAi = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const cwd = makeProjectDir();
+    writeFileSync(path.join(cwd, ".env"), "OPENAI_API_KEY=from-dotenv\n", "utf8");
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
+    expect(io.stdout()).toContain("Orchestrator: api (gpt-5.4)");
+
+    cwdSpy.mockRestore();
+    if (previousOpenAi === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previousOpenAi;
+    }
+    io.restore();
+  });
+
   it("fails when an API-only model is requested without provider credentials", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
@@ -146,6 +175,57 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Mode: default");
     expect(io.stdout()).toContain("Orchestrator: codex (gpt-5.4)");
     expect(io.stdout()).toContain("Auto-commit: disabled");
+    expect(io.stdout()).toContain("Run completed.");
+    io.restore();
+  });
+
+  it("uses a project team override before user teams with the same name", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    mkdirSync(path.join(homeDir, ".kodo", "teams"), { recursive: true });
+    writeFileSync(
+      path.join(homeDir, ".kodo", "teams", "full.json"),
+      `${JSON.stringify({
+        description: "user full",
+        agents: {
+          worker_fast: {
+            backend: "codex",
+            description: "user team agent",
+            model: "gpt-5.4",
+          },
+        },
+      })}\n`,
+    );
+
+    const project = makeProjectDir();
+    mkdirSync(path.join(project, ".kodo"), { recursive: true });
+    writeFileSync(
+      path.join(project, ".kodo", "team.json"),
+      `${JSON.stringify({
+        description: "project full",
+        agents: {
+          tester: {
+            backend: "codex",
+            description: "project team agent",
+            model: "gpt-5.4",
+          },
+        },
+      })}\n`,
+    );
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    const teamPath = runId ? path.join(runsRoot(homeDir), runId, "team.json") : "";
+    expect(JSON.parse(readFileSync(teamPath, "utf8"))).toMatchObject({
+      description: "project full",
+      agents: {
+        tester: {
+          description: "project team agent",
+        },
+      },
+    });
     io.restore();
   });
 
@@ -191,6 +271,7 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(runCli(["--project", project])).toBe(0);
     expect(io.stdout()).toContain("Team: quick");
     expect(io.stdout()).toContain("Budget: 12 exchanges/cycle, 3 cycles");
+    expect(io.stdout()).toContain("Run completed.");
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "quick",
       orchestrator: "api",
@@ -203,7 +284,7 @@ describe("runCli noninteractive runtime resolution", () => {
     io.restore();
   });
 
-  it("creates a pending run that is discoverable by run id", () => {
+  it("creates a completed run that is discoverable by run id", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
@@ -219,6 +300,7 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(run?.goal).toBe("Ship the CLI");
     expect(run?.projectDir).toBe(project);
     expect(run?.orchestrator).toBe("api");
+    expect(run?.finished).toBe(true);
     io.restore();
   });
 
@@ -237,5 +319,64 @@ describe("runCli noninteractive runtime resolution", () => {
     const goalFile = runId ? path.join(runsRoot(homeDir), runId, "goal.md") : "";
     expect(goalFile ? readFileSync(goalFile, "utf8") : "").toContain("Refactor the auth flow");
     io.restore();
+  });
+
+  it("shows the audited goal preview copy before reusing goal.md", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
+    setPromptAdapter(scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]));
+    const io = captureOutput();
+
+    expect(runCli(["--project", project])).toBe(0);
+    expect(io.stdout()).toContain(`Found existing goal in ${path.join(project, "goal.md")}:`);
+    expect(io.stdout()).toContain("Use this goal? [Y/n]");
+    io.restore();
+  });
+
+  it("writes a test report for test mode runs", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const target = path.join(project, "src");
+    mkdirSync(target, { recursive: true });
+    const io = captureOutput();
+
+    expect(runCli(["--test", "--project", project, "--target", "src"])).toBe(0);
+    const reportPath = io.stdout().match(/Report path: (.+)/u)?.[1];
+    expect(reportPath).toBeTruthy();
+    expect(reportPath ? readFileSync(reportPath, "utf8") : "").toContain("# Test Report");
+    io.restore();
+  });
+
+  it("resumes an incomplete run and marks it complete", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship resume support", "--project", project])).toBe(0);
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    expect(runId).toBeTruthy();
+    const runRoot = runId ? path.join(runsRoot(homeDir), runId) : "";
+    const logPath = runRoot ? path.join(runRoot, "log.jsonl") : "";
+
+    const trimmed = readFileSync(logPath, "utf8")
+      .split(/\r?\n/u)
+      .filter((line) => line.trim().length > 0)
+      .filter((line) => !line.includes('"event":"run_end"'))
+      .join("\n");
+    writeFileSync(logPath, `${trimmed}\n`, "utf8");
+    io.restore();
+
+    const resumeIo = captureOutput();
+    expect(runCli(["--resume", runId ?? "", "--project", project])).toBe(0);
+    expect(resumeIo.stdout()).toContain("Run completed.");
+    expect(getRunById(runId ?? "", homeDir)?.finished).toBe(true);
+    resumeIo.restore();
   });
 });

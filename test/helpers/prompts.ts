@@ -1,4 +1,5 @@
 import type { PromptAdapter } from "../../src/cli/prompts.js";
+import { writeStdout } from "../../src/cli/ui.js";
 
 export function scriptedPrompts(answers: Array<string | boolean | string[]>): PromptAdapter {
   const queue = [...answers];
@@ -18,11 +19,12 @@ export function scriptedPrompts(answers: Array<string | boolean | string[]>): Pr
       }
       return value;
     },
-    confirm() {
+    confirm(message, defaultValue) {
       const value = next();
       if (typeof value !== "boolean") {
         throw new Error(`Expected boolean prompt answer, received ${typeof value}`);
       }
+      writeStdout(`${message} ${defaultValue ? "[Y/n]" : "[y/N]"} `);
       return value;
     },
     select() {

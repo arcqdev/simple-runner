@@ -1,9 +1,11 @@
 import { readSync } from "node:fs";
+import process from "node:process";
 
 import { writeStdout } from "./ui.js";
 
 export type PromptAdapter = {
   confirm(message: string, defaultValue?: boolean): boolean | null;
+  multiline?(message: string): string | null;
   multiselect(message: string, choices: string[], defaults?: string[]): string[] | null;
   select(message: string, choices: string[], defaultValue?: string): string | null;
   text(message: string, defaultValue?: string): string | null;
@@ -50,6 +52,34 @@ const defaultAdapter: PromptAdapter = {
     }
     const normalized = line.trim().toLowerCase();
     return normalized === "y" || normalized === "yes";
+  },
+  multiline(message) {
+    writeStdout(`${message}\n`);
+    writeStdout("----------------------------------------\n");
+    const lines: string[] = [];
+
+    if (!process.stdin.isTTY) {
+      while (true) {
+        const line = readLine();
+        if (line === null) {
+          break;
+        }
+        lines.push(line);
+      }
+    } else {
+      while (true) {
+        const line = readLine();
+        if (line === null) {
+          break;
+        }
+        if (line === "") {
+          break;
+        }
+        lines.push(line);
+      }
+    }
+
+    return lines.join("\n");
   },
   select(message, choices, defaultValue) {
     writeStdout(`${message}\n`);

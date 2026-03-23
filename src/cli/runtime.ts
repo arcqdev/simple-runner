@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import os from "node:os";
-import process from "node:process";
 
-import { listAvailableTeams } from "../config/team-config.js";
+import { getTeamByName, listAvailableTeams } from "../config/team-config.js";
 import { loadProjectConfig, saveProjectConfig } from "../config/project-config.js";
 import { getUserDefault } from "../config/user-config.js";
 import { CliError } from "../core/errors.js";
 import { availableBackends } from "../runtime/backends.js";
 import { getPromptAdapter } from "./prompts.js";
+import { printLines, writeStdout } from "./ui.js";
 import type { MainFlags } from "./types.js";
 
 export const DEFAULT_MAX_EXCHANGES = 30;
@@ -137,7 +137,21 @@ function promptInteger(message: string, defaultValue: number): number {
   return value;
 }
 
-function selectTeam(defaultValue: string): string {
+function selectNumeric(message: string, presets: number[], defaultValue: number): number {
+  const prompt = getPromptAdapter();
+  const presetStrings = presets.map(String);
+  const defaultChoice = presetStrings.includes(String(defaultValue)) ? String(defaultValue) : presetStrings[0] ?? String(defaultValue);
+  const choice = prompt.select(message, [...presetStrings, "Custom..."], defaultChoice);
+  if (choice === null) {
+    throw new CliError("Cancelled.");
+  }
+  if (choice !== "Custom...") {
+    return Number.parseInt(choice, 10);
+  }
+  return promptInteger("  Enter value", defaultValue);
+}
+
+function selectTeam(defaultValue: string, projectDir: string): string {
   const prompt = getPromptAdapter();
   const teams = listAvailableTeams();
   const choices = teams.map((team) => `${team.name} — ${team.config.description ?? (team.source === "user" ? "user team" : "built-in team")}`);
@@ -150,6 +164,9 @@ function selectTeam(defaultValue: string): string {
   if (teamName === undefined || teamName.length === 0) {
     throw new CliError(`Unknown team: ${selected}`);
   }
+  if (getTeamByName(teamName, os.homedir(), projectDir) === null) {
+    throw new CliError(`Unknown team: ${teamName}`);
+  }
   return teamName;
 }
 
@@ -160,19 +177,19 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
   const choices: string[] = [];
 
   if (hasApi) {
-    choices.push("api");
+    choices.push("api (recommended — delegates cleanly, pay-per-token)");
   }
   if (backends.claude) {
-    choices.push("claude-code");
+    choices.push("claude-code (free on Max subscription)");
   }
   if (backends["gemini-cli"]) {
-    choices.push("gemini-cli");
+    choices.push("gemini-cli (free with Google account)");
   }
   if (backends.codex) {
-    choices.push("codex");
+    choices.push("codex (free on Codex subscription)");
   }
   if (backends.cursor) {
-    choices.push("cursor");
+    choices.push("cursor (free on Cursor subscription)");
   }
   if (backends.kimi) {
     choices.push("kimi-code");
@@ -184,11 +201,12 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
     );
   }
 
-  const defaultOrchestrator = choices.includes("api") ? "api" : preferredOrchestrator();
-  const selected = prompt.select("Orchestrator", choices, defaultOrchestrator);
+  const defaultOrchestrator = hasApi ? "api (recommended — delegates cleanly, pay-per-token)" : choices.find((choice) => choice.startsWith(preferredOrchestrator())) ?? choices[0];
+  const selected = prompt.select("Orchestrator:", choices, defaultOrchestrator);
   if (selected === null) {
     throw new CliError("Cancelled.");
   }
+  const orchestrator = selected.split(" (")[0] ?? selected;
 
   const modelChoices: Record<string, string[]> = {
     api: ["gpt-5.4", "opus", "gemini-2.5-flash", "(custom)"],
@@ -199,23 +217,23 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
     "kimi-code": ["kimi-k2.5", "(custom)"],
   };
 
-  const defaultModel = defaultCliModel(selected);
-  const modelChoice = prompt.select("Orchestrator model", modelChoices[selected] ?? [defaultModel, "(custom)"], defaultModel);
+  const defaultModel = defaultCliModel(orchestrator);
+  const modelChoice = prompt.select("Orchestrator model:", modelChoices[orchestrator] ?? [defaultModel, "(custom)"], defaultModel);
   if (modelChoice === null) {
     throw new CliError("Cancelled.");
   }
   if (modelChoice !== "(custom)") {
-    return { orchestrator: selected, orchestratorModel: modelChoice };
+    return { orchestrator, orchestratorModel: modelChoice };
   }
 
-  const custom = prompt.text("Model name", defaultModel);
+  const custom = prompt.text("  Model name (provider:model or alias)", defaultModel);
   if (custom === null) {
     throw new CliError("Cancelled.");
   }
   if (custom.trim().length === 0) {
     throw new CliError("Model name must not be empty.");
   }
-  return { orchestrator: selected, orchestratorModel: custom.trim() };
+  return { orchestrator, orchestratorModel: custom.trim() };
 }
 
 function isSavedRuntimeParams(value: SavedRuntimeParams | null): value is ResolvedRuntimeParams {
@@ -234,21 +252,18 @@ function maybeReuseSavedParams(projectDir: string): ResolvedRuntimeParams | null
     return null;
   }
 
-  const team = listAvailableTeams().find((entry) => entry.name === loaded.team);
-  if (team === undefined) {
+  const team = getTeamByName(loaded.team, os.homedir(), projectDir);
+  if (team === null) {
     return null;
   }
 
-  const lines = [
+  printLines([
     "",
     "  Previous config found:",
     `    Team:         ${team.name} — ${team.config.description ?? (team.source === "user" ? "user team" : "built-in team")}`,
     `    Orchestrator: ${loaded.orchestrator} (${loaded.orchestratorModel})`,
     `    Exchanges:    ${loaded.maxExchanges}/cycle, ${loaded.maxCycles} cycles`,
-  ];
-  for (const line of lines) {
-    process.stdout.write(`${line}\n`);
-  }
+  ]);
 
   const reuse = prompt.confirm("Reuse this config?", true);
   if (reuse === null) {
@@ -276,11 +291,25 @@ function maybeReuseSavedParams(projectDir: string): ResolvedRuntimeParams | null
 
 function selectInteractiveRuntimeParams(projectDir: string): ResolvedRuntimeParams {
   const prompt = getPromptAdapter();
+  writeStdout("\n--- Configuration ---\n\n");
+
+  const backends = availableBackends();
+  const backendSummary = [
+    `Claude Code: ${backends.claude ? "yes" : "not found"}`,
+    `Codex: ${backends.codex ? "yes" : "not found"}`,
+    `Cursor: ${backends.cursor ? "yes" : "not found"}`,
+    `Gemini CLI: ${backends["gemini-cli"] ? "yes" : "not found"}`,
+  ];
+  writeStdout(`  Backends: ${backendSummary.join(" | ")}\n\n`);
+
   const defaultTeam = "full";
-  const team = selectTeam(defaultTeam);
+  const team = selectTeam(defaultTeam, projectDir);
   const { orchestrator, orchestratorModel } = selectOrchestrator();
-  const maxExchanges = promptInteger("Max exchanges per cycle", DEFAULT_MAX_EXCHANGES);
-  const maxCycles = promptInteger("Max cycles", DEFAULT_MAX_CYCLES);
+  writeStdout("\n  An exchange = one orchestrator turn: think, delegate to agent, read result.\n");
+  const maxExchanges = selectNumeric("Max exchanges per cycle:", [20, 30, 50], DEFAULT_MAX_EXCHANGES);
+  writeStdout("\n  A cycle = one full orchestrator session. If it doesn't finish,\n");
+  writeStdout("  a new cycle starts with a summary of prior progress.\n");
+  const maxCycles = selectNumeric("Max cycles:", [1, 3, 5, 10], DEFAULT_MAX_CYCLES);
   const autoCommit = getUserDefault("auto_commit", true, os.homedir());
   const effortChoice = prompt.select("Effort", ["standard", "low", "high", "max"], "standard");
   if (effortChoice === null) {
