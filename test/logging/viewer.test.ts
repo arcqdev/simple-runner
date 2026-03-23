@@ -38,6 +38,8 @@ describe("viewer", () => {
     expect(html).toContain("run_start");
     expect(html).toContain("cycle_end");
     expect(html).not.toContain("not-json");
+    expect(html).toContain("const EMBEDDED_DATA =");
+    expect(html).toContain("const EMBEDDED_INDEX =");
   });
 
   it("skips browser launching in test environments", () => {
@@ -66,6 +68,22 @@ describe("viewer", () => {
     expect(html).toContain("known run");
     expect(html).toContain("20260323_010203");
     expect(html).toContain("Investigate the auth regression");
+    expect(html).toContain("project_name");
+  });
+
+  it("shows trace-upload affordances only when enabled", () => {
+    const homeDir = makeTempDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+
+    const enabledUrl = openViewer(null, { openBrowser: false });
+    const enabledHtml = readFileSync(new URL(enabledUrl).pathname, "utf8");
+    expect(enabledHtml).toContain("Trace Upload Enabled");
+
+    vi.unstubAllEnvs();
+    const disabledUrl = openViewer(null, { openBrowser: false });
+    const disabledHtml = readFileSync(new URL(disabledUrl).pathname, "utf8");
+    expect(disabledHtml).toContain("Trace Upload Disabled");
   });
 
   it("serves the viewer over HTTP and exposes run log API responses", async () => {
@@ -88,6 +106,9 @@ describe("viewer", () => {
       expect(logResponse.ok).toBe(true);
       const body = await logResponse.text();
       expect(body).toContain("\"event\":\"run_start\"");
+
+      const invalidResponse = await fetch(`${server.url}api/log/%2E%2E%2Fwat`);
+      expect(invalidResponse.status).toBe(400);
     } finally {
       await server.close();
     }

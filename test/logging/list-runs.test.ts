@@ -84,6 +84,31 @@ describe("listRuns", () => {
     expect(runs.find((run) => run.runId === "legacy_run")?.goal).toBe("legacy");
   });
 
+  it("includes failed-before-start runs reconstructed from cli_args", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    mkdirSync(project, { recursive: true });
+
+    writeEvents(homeDir, "cli_only", "log.jsonl", [
+      {
+        event: "cli_args",
+        goal_text: "preflight failed",
+        orchestrator: "codex",
+        orchestrator_model: "gpt-5.4",
+        project_dir: project,
+        max_exchanges: 20,
+        max_cycles: 4,
+        team: "full",
+      },
+    ]);
+
+    const runs = listRuns(project);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.goal).toBe("preflight failed");
+    expect(runs[0]?.finished).toBe(false);
+  });
+
   it("finds incomplete runs only within the requested project", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);

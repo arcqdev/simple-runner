@@ -98,22 +98,63 @@ export function executePendingRun(
   const artifacts = buildArtifacts(runDir, goal, flags);
   const summary = buildGenericSummary(goal.goalText ?? "", params);
 
+  emitLogEvent("preflight_start", {
+    orchestrator: params.orchestrator,
+    project_dir: flags.project,
+    team: params.team,
+  });
+  emitLogEvent("preflight_end", {
+    ok: true,
+    orchestrator: params.orchestrator,
+    team: params.team,
+  });
   emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
   emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
+  emitLogEvent("parallel_group_start", {
+    group: "implementation",
+    agents: [params.orchestrator],
+  });
   emitLogEvent("cycle_start", {
     cycle_index: 1,
     orchestrator: params.orchestrator,
     project_dir: flags.project,
   });
+  emitLogEvent("orchestrator_tool_call", {
+    agent: "orchestrator",
+    cycle_index: 1,
+    tool: "implement_goal",
+  });
+  emitLogEvent("session_query_end", {
+    session: params.orchestrator,
+    session_id: `${runDir.runId}-orchestrator`,
+  });
   emitLogEvent("agent_run_end", {
     agent: "orchestrator",
     status: "completed",
+  });
+  emitLogEvent("orchestrator_tool_result", {
+    agent: "orchestrator",
+    cycle_index: 1,
+    tool: "implement_goal",
+    ok: true,
+  });
+  emitLogEvent("parallel_group_end", {
+    group: "implementation",
+    finished: true,
   });
   emitLogEvent("cycle_end", {
     cycle_index: 1,
     exchanges: 1,
     finished: true,
     summary,
+  });
+  emitLogEvent(params.autoCommit ? "auto_commit_done" : "auto_commit_disabled", {
+    enabled: params.autoCommit,
+  });
+  emitLogEvent("persist_run_state", {
+    config_file: runDir.configFile,
+    goal_file: runDir.goalFile,
+    run_dir: runDir.root,
   });
   emitLogEvent("run_end", {
     finished: true,

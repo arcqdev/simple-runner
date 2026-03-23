@@ -127,6 +127,30 @@ describe("parseRun", () => {
     expect(parseRun(corrupt)?.lastSummary).toBe("ok");
   });
 
+  it("reconstructs failed-before-start runs from cli_args", () => {
+    const tempDir = makeTempDir();
+    const logFile = path.join(tempDir, "cli-only.jsonl");
+    writeEvents(logFile, [
+      {
+        event: "cli_args",
+        goal_text: "recover me",
+        orchestrator: "codex",
+        orchestrator_model: "gpt-5.4",
+        project_dir: tempDir,
+        max_exchanges: 18,
+        max_cycles: 4,
+        team: "full",
+      },
+    ]);
+
+    const state = parseRun(logFile);
+    expect(state).not.toBeNull();
+    expect(state?.goal).toBe("recover me");
+    expect(state?.orchestrator).toBe("codex");
+    expect(state?.model).toBe("gpt-5.4");
+    expect(state?.finished).toBe(false);
+  });
+
   it("tracks stage completion and agent session ids", () => {
     const tempDir = makeTempDir();
     const logFile = path.join(tempDir, "staged.jsonl");
@@ -150,11 +174,28 @@ describe("parseRun", () => {
     expect(state?.hasStages).toBe(true);
     expect(state?.completedStages).toEqual([1]);
     expect(state?.stageSummaries).toEqual(["s1 summary"]);
+    expect(state?.currentStageCycles).toBe(0);
     expect(state?.completedCycles).toBe(2);
     expect(state?.agentSessionIds).toEqual({
       worker_fast: "chat-xyz",
       worker_smart: "ses-abc",
     });
     expect(state?.teamPreset).toBe("quick");
+  });
+
+  it("tracks active stage cycle counts until the stage ends", () => {
+    const tempDir = makeTempDir();
+    const logFile = path.join(tempDir, "active-stage.jsonl");
+    writeEvents(logFile, [
+      { event: "cli_args", team: "quick", goal_text: "ship it", project_dir: tempDir },
+      { event: "run_start", goal: "ship it", orchestrator: "api", model: "m", project_dir: tempDir, max_exchanges: 30, max_cycles: 5, team: [], has_stages: true },
+      { event: "stage_start", stage_index: 2 },
+      { event: "cycle_end", summary: "part 1" },
+      { event: "cycle_end", summary: "part 2" },
+    ]);
+
+    const state = parseRun(logFile);
+    expect(state?.currentStageCycles).toBe(2);
+    expect(state?.completedStages).toEqual([]);
   });
 });

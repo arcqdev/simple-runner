@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import {
   AGENT_DEFAULTS,
@@ -144,6 +146,39 @@ function parseIssueArgs(args: string[]): { noOpen: boolean; project: string; run
   }
 
   return { noOpen, project, runId };
+}
+
+function launchViewerServer(port: number, logFile: string | null): string {
+  if (port <= 0) {
+    throw new CliError("kodo logs --port must be a positive integer when launching HTTP viewer mode.");
+  }
+  if (!commandOnPath("npx")) {
+    throw new CliError("npx is required to launch the HTTP viewer mode.");
+  }
+  const viewerCliPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "viewer-cli.ts");
+  const args = ["vite-node", viewerCliPath, "--serve", "--port", String(port)];
+  if (logFile !== null) {
+    args.push(logFile);
+  }
+
+  try {
+    const detached = spawn("npx", ["--yes", ...args], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        KODO_NO_VIEWER: "1",
+      },
+    });
+    detached.unref();
+  } catch (error) {
+    throw new CliError(
+      `Failed to launch HTTP viewer: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  return `http://127.0.0.1:${port}/`;
 }
 
 function formatRunStatus(run: RunState): string {
@@ -573,11 +608,11 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
     if (!resolved.endsWith(".jsonl")) {
       throw new CliError(`Expected a .jsonl log file: ${resolved}`);
     }
-    const viewerUrl = openViewer(resolved, { openBrowser });
+    const viewerUrl =
+      parsed.port === 8080 ? openViewer(resolved, { openBrowser }) : launchViewerServer(parsed.port, resolved);
     printLines([
       `Log viewer: ${viewerUrl}`,
       `Log file: ${resolved}`,
-      ...(parsed.port === 8080 ? [] : [`Requested port: ${parsed.port} (file viewer opened; HTTP serving is not wired yet)`]),
     ]);
     return;
   }
@@ -592,11 +627,13 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
     throw new CliError("Cancelled.");
   }
 
-  const viewerUrl = openViewer(selected.logFile, { openBrowser });
+  const viewerUrl =
+    parsed.port === 8080
+      ? openViewer(selected.logFile, { openBrowser })
+      : launchViewerServer(parsed.port, selected.logFile);
   printLines([
     `Log viewer: ${viewerUrl}`,
     `Log file: ${selected.logFile}`,
-    ...(parsed.port === 8080 ? [] : [`Requested port: ${parsed.port} (file viewer opened; HTTP serving is not wired yet)`]),
   ]);
 }
 

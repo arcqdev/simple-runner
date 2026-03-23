@@ -8,6 +8,7 @@ export type RunState = {
   agentSessionIds: Record<string, string>;
   completedCycles: number;
   completedStages: number[];
+  currentStageCycles: number;
   finished: boolean;
   goal: string;
   hasStages: boolean;
@@ -52,6 +53,22 @@ function readJsonLines(filePath: string): RunEvent[] {
     });
 }
 
+function stringField(event: RunEvent | null, key: string): string | null {
+  if (event === null) {
+    return null;
+  }
+  const value = event[key];
+  return typeof value === "string" ? value : null;
+}
+
+function numberField(event: RunEvent | null, key: string): number | null {
+  if (event === null) {
+    return null;
+  }
+  const value = event[key];
+  return typeof value === "number" ? value : null;
+}
+
 export function parseRun(logFile: string): RunState | null {
   const events = readJsonLines(logFile);
   let runStart: RunEvent | null = null;
@@ -62,9 +79,13 @@ export function parseRun(logFile: string): RunState | null {
   let hasStages = false;
   let lastSummary = "";
   let isDebug = false;
+  let currentStageCycles = 0;
+  let currentStageIndex: number | null = null;
   let pendingSessionId: string | null = null;
   const agentSessionIds: Record<string, string> = {};
+  const sessionIdsByName: Record<string, string> = {};
   const stageSummaries: string[] = [];
+  const genericSessionNames = new Set(["claude", "codex", "cursor", "gemini-cli"]);
 
   for (const event of events) {
     switch (event.event) {
@@ -75,9 +96,16 @@ export function parseRun(logFile: string): RunState | null {
       case "cli_args":
         cliArgs = event;
         break;
+      case "stage_start":
+        currentStageIndex = numberField(event, "stage_index");
+        currentStageCycles = 0;
+        break;
       case "cycle_end":
         completedCycles += 1;
         lastSummary = typeof event.summary === "string" ? event.summary : lastSummary;
+        if (currentStageIndex !== null) {
+          currentStageCycles += 1;
+        }
         break;
       case "stage_end":
         if (event.finished === true && typeof event.stage_index === "number") {
@@ -86,6 +114,8 @@ export function parseRun(logFile: string): RunState | null {
             stageSummaries.push(event.summary);
           }
         }
+        currentStageIndex = null;
+        currentStageCycles = 0;
         break;
       case "run_end":
         finished = true;
@@ -94,21 +124,28 @@ export function parseRun(logFile: string): RunState | null {
         isDebug = true;
         break;
       case "session_query_end":
-        if (typeof event.session_id === "string") {
-          pendingSessionId = event.session_id;
-        } else if (typeof event.chat_id === "string") {
-          pendingSessionId = event.chat_id;
-        } else {
-          pendingSessionId = null;
+        pendingSessionId = stringField(event, "session_id") ?? stringField(event, "chat_id");
+        {
+          const sessionName = stringField(event, "session");
+          if (sessionName !== null && pendingSessionId !== null) {
+            sessionIdsByName[sessionName] = pendingSessionId;
+            agentSessionIds[sessionName] = pendingSessionId;
+          }
         }
         break;
       case "agent_run_end":
-        if (
-          pendingSessionId !== null &&
-          typeof event.agent === "string" &&
-          event.agent.length > 0
-        ) {
-          agentSessionIds[event.agent] = pendingSessionId;
+        if (typeof event.agent === "string" && event.agent.length > 0) {
+          if (pendingSessionId !== null) {
+            agentSessionIds[event.agent] = pendingSessionId;
+          }
+          for (const sessionName of genericSessionNames) {
+            const sessionId = sessionIdsByName[sessionName];
+            if (sessionId !== undefined) {
+              agentSessionIds[event.agent] = sessionId;
+              delete sessionIdsByName[sessionName];
+              delete agentSessionIds[sessionName];
+            }
+          }
         }
         pendingSessionId = null;
         break;
@@ -117,11 +154,11 @@ export function parseRun(logFile: string): RunState | null {
     }
   }
 
-  if (runStart === null || cliArgs === null) {
+  if (cliArgs === null) {
     return null;
   }
 
-  const goal = typeof runStart.goal === "string" ? runStart.goal : "";
+  const goal = stringField(runStart, "goal") ?? stringField(cliArgs, "goal_text") ?? "";
 
   if (goal.length === 0) {
     return null;
@@ -131,53 +168,26 @@ export function parseRun(logFile: string): RunState | null {
     agentSessionIds,
     completedCycles,
     completedStages,
+    currentStageCycles,
     finished,
     goal,
     hasStages,
     isDebug,
     lastSummary,
     logFile,
-    maxCycles:
-      typeof runStart.max_cycles === "number"
-        ? runStart.max_cycles
-        : typeof cliArgs.max_cycles === "number"
-          ? cliArgs.max_cycles
-          : 0,
+    maxCycles: numberField(runStart, "max_cycles") ?? numberField(cliArgs, "max_cycles") ?? 0,
     maxExchanges:
-      typeof runStart.max_exchanges === "number"
-        ? runStart.max_exchanges
-        : typeof cliArgs.max_exchanges === "number"
-          ? cliArgs.max_exchanges
-          : 0,
-    model:
-      typeof runStart.model === "string"
-        ? runStart.model
-        : typeof cliArgs.orchestrator_model === "string"
-          ? cliArgs.orchestrator_model
-          : "unknown",
+      numberField(runStart, "max_exchanges") ?? numberField(cliArgs, "max_exchanges") ?? 0,
+    model: stringField(runStart, "model") ?? stringField(cliArgs, "orchestrator_model") ?? "unknown",
     orchestrator:
-      typeof runStart.orchestrator === "string"
-        ? runStart.orchestrator
-        : typeof cliArgs.orchestrator === "string"
-          ? cliArgs.orchestrator
-          : "unknown",
-    projectDir:
-      typeof runStart.project_dir === "string"
-        ? runStart.project_dir
-        : typeof cliArgs.project_dir === "string"
-          ? cliArgs.project_dir
-          : "",
+      stringField(runStart, "orchestrator") ?? stringField(cliArgs, "orchestrator") ?? "unknown",
+    projectDir: stringField(runStart, "project_dir") ?? stringField(cliArgs, "project_dir") ?? "",
     runId: extractRunId(logFile),
     stageSummaries,
-    team: Array.isArray(runStart.team)
+    team: Array.isArray(runStart?.team)
       ? runStart.team.filter((value): value is string => typeof value === "string")
       : [],
-    teamPreset:
-      typeof cliArgs.team === "string"
-        ? cliArgs.team
-        : typeof cliArgs.mode === "string"
-          ? cliArgs.mode
-          : "full",
+    teamPreset: stringField(cliArgs, "team") ?? stringField(cliArgs, "mode") ?? "full",
   };
 }
 
