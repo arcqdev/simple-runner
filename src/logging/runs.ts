@@ -3,17 +3,23 @@ import os from "node:os";
 import path from "node:path";
 
 export type RunState = {
+  agentSessionIds: Record<string, string>;
   completedCycles: number;
+  completedStages: number[];
   finished: boolean;
   goal: string;
+  hasStages: boolean;
   isDebug: boolean;
   lastSummary: string;
   logFile: string;
+  maxExchanges: number;
   maxCycles: number;
   model: string;
   orchestrator: string;
   projectDir: string;
   runId: string;
+  stageSummaries: string[];
+  team: string[];
   teamPreset: string;
 };
 
@@ -49,14 +55,20 @@ export function parseRun(logFile: string): RunState | null {
   let runStart: RunEvent | null = null;
   let cliArgs: RunEvent | null = null;
   let completedCycles = 0;
+  const completedStages: number[] = [];
   let finished = false;
+  let hasStages = false;
   let lastSummary = "";
   let isDebug = false;
+  let pendingSessionId: string | null = null;
+  const agentSessionIds: Record<string, string> = {};
+  const stageSummaries: string[] = [];
 
   for (const event of events) {
     switch (event.event) {
       case "run_start":
         runStart = event;
+        hasStages = event.has_stages === true;
         break;
       case "cli_args":
         cliArgs = event;
@@ -65,65 +77,96 @@ export function parseRun(logFile: string): RunState | null {
         completedCycles += 1;
         lastSummary = typeof event.summary === "string" ? event.summary : lastSummary;
         break;
+      case "stage_end":
+        if (event.finished === true && typeof event.stage_index === "number") {
+          completedStages.push(event.stage_index);
+          if (typeof event.summary === "string" && event.summary.length > 0) {
+            stageSummaries.push(event.summary);
+          }
+        }
+        break;
       case "run_end":
         finished = true;
         break;
       case "debug_run_start":
         isDebug = true;
         break;
+      case "session_query_end":
+        if (typeof event.session_id === "string") {
+          pendingSessionId = event.session_id;
+        } else if (typeof event.chat_id === "string") {
+          pendingSessionId = event.chat_id;
+        } else {
+          pendingSessionId = null;
+        }
+        break;
+      case "agent_run_end":
+        if (pendingSessionId !== null && typeof event.agent === "string" && event.agent.length > 0) {
+          agentSessionIds[event.agent] = pendingSessionId;
+        }
+        pendingSessionId = null;
+        break;
       default:
         break;
     }
   }
 
-  if (cliArgs === null) {
+  if (runStart === null || cliArgs === null) {
     return null;
   }
 
-  const goalSource = runStart ?? cliArgs;
-  const goal =
-    typeof goalSource.goal === "string"
-      ? goalSource.goal
-      : typeof cliArgs.goal_text === "string"
-        ? cliArgs.goal_text
-        : "";
+  const goal = typeof runStart.goal === "string" ? runStart.goal : "";
 
   if (goal.length === 0) {
     return null;
   }
 
   return {
+    agentSessionIds,
     completedCycles,
+    completedStages,
     finished,
     goal,
+    hasStages,
     isDebug,
     lastSummary,
     logFile,
     maxCycles:
-      typeof goalSource.max_cycles === "number"
-        ? goalSource.max_cycles
+      typeof runStart.max_cycles === "number"
+        ? runStart.max_cycles
         : typeof cliArgs.max_cycles === "number"
           ? cliArgs.max_cycles
           : 0,
+    maxExchanges:
+      typeof runStart.max_exchanges === "number"
+        ? runStart.max_exchanges
+        : typeof cliArgs.max_exchanges === "number"
+          ? cliArgs.max_exchanges
+          : 0,
     model:
-      typeof goalSource.model === "string"
-        ? goalSource.model
+      typeof runStart.model === "string"
+        ? runStart.model
         : typeof cliArgs.orchestrator_model === "string"
           ? cliArgs.orchestrator_model
           : "unknown",
     orchestrator:
-      typeof goalSource.orchestrator === "string"
-        ? goalSource.orchestrator
+      typeof runStart.orchestrator === "string"
+        ? runStart.orchestrator
         : typeof cliArgs.orchestrator === "string"
           ? cliArgs.orchestrator
           : "unknown",
     projectDir:
-      typeof goalSource.project_dir === "string"
-        ? goalSource.project_dir
+      typeof runStart.project_dir === "string"
+        ? runStart.project_dir
         : typeof cliArgs.project_dir === "string"
           ? cliArgs.project_dir
           : "",
     runId: extractRunId(logFile),
+    stageSummaries,
+    team:
+      Array.isArray(runStart.team)
+        ? runStart.team.filter((value): value is string => typeof value === "string")
+        : [],
     teamPreset:
       typeof cliArgs.team === "string"
         ? cliArgs.team

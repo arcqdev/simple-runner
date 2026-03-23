@@ -15,7 +15,7 @@ import {
 } from "../config/team-config.js";
 import { CliError } from "../core/errors.js";
 import { availableBackends } from "../runtime/backends.js";
-import { listRuns, truncateWord, type RunState } from "../logging/runs.js";
+import { getRunById, listRuns, truncateWord, type RunState } from "../logging/runs.js";
 import { getPromptAdapter } from "./prompts.js";
 import type { TopLevelSubcommand } from "./types.js";
 import { printLines, writeStderr } from "./ui.js";

@@ -207,6 +207,7 @@ Concrete tasks:
 
 - [ ] Port run directory management.
 - [x] Port run parsing and listing.
+- [x] Add initial JSONL log init/append/emit helpers with regression tests.
 - [ ] Port stats/report helpers.
 - [ ] Port replay/log formatting.
 - [ ] Port `viewer.py`, `viewer.html`, and trace upload support.
