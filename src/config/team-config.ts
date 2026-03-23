@@ -4,6 +4,7 @@ import path from "node:path";
 
 import fullTeam from "../defaults/team-full.json";
 import quickTeam from "../defaults/team-quick.json";
+import testTeam from "../defaults/team-test.json";
 import { type BackendKey, availableBackends, isBackendKey, smartModelForBackend, type TeamBackend } from "../runtime/backends.js";
 
 export type TeamAgentConfig = {
@@ -46,6 +47,7 @@ export const TEAM_BACKEND_MAP: Record<TeamBackend, BackendKey | ""> = {
 const BUILTIN_TEAMS: Record<string, TeamConfig> = {
   full: fullTeam as TeamConfig,
   quick: quickTeam as TeamConfig,
+  test: testTeam as TeamConfig,
 };
 
 export const AGENT_DEFAULTS = {

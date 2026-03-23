@@ -6,6 +6,7 @@ import { VERSION } from "../core/version.js";
 import { findIncompleteRuns, getRunById } from "../logging/runs.js";
 import { parseMainArgs, isHandledAsSubcommand } from "./params.js";
 import { getPromptAdapter } from "./prompts.js";
+import { loadOrResolveRuntimeParams, resolveGoal } from "./runtime.js";
 import { handleSubcommand } from "./subcommands.js";
 import type { ParsedMain } from "./types.js";
 import { emitJson, printLines, writeStderr } from "./ui.js";
@@ -66,11 +67,16 @@ function printVersion(): void {
 }
 
 function summarizeMainInvocation(parsed: ParsedMain): void {
+  const params = loadOrResolveRuntimeParams(parsed.flags);
+  const goal = resolveGoal(parsed.flags);
+
   const summary = {
     status: "pending",
     command: parsed.command,
-    flags: parsed.flags,
-    message: "CLI shell parity is implemented; runtime workflows are still pending the deeper TypeScript port.",
+    goal_source: goal.source,
+    goal_text: goal.goalText,
+    params,
+    message: "Runtime parameter resolution is implemented; execution orchestration is still pending the deeper TypeScript port.",
   };
 
   if (parsed.flags.json) {
@@ -79,10 +85,16 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
   }
 
   printLines([
-    "CLI shell parity is implemented; runtime workflows are still pending the deeper TypeScript port.",
+    "Runtime parameter resolution is implemented; execution orchestration is still pending the deeper TypeScript port.",
     "",
     `Mode: ${parsed.command}`,
     `Project: ${parsed.flags.project}`,
+    `Team: ${params.team}`,
+    `Orchestrator: ${params.orchestrator} (${params.orchestratorModel})`,
+    `Budget: ${params.maxExchanges} exchanges/cycle, ${params.maxCycles} cycles`,
+    `Auto-commit: ${params.autoCommit ? "enabled" : "disabled"}`,
+    `Goal source: ${goal.source}`,
+    ...(goal.goalText === null ? [] : [`Goal: ${goal.goalText.replace(/\s+/gu, " ").trim()}`]),
   ]);
 }
 
