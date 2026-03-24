@@ -80,6 +80,7 @@ describe("runCli noninteractive runtime resolution", () => {
     const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
     expect(runId).toBeTruthy();
     expect(runId ? existsSync(path.join(runsRoot(homeDir), runId, "goal.md")) : false).toBe(true);
+    expect(runId ? existsSync(path.join(runsRoot(homeDir), runId, "goal-plan.json")) : false).toBe(true);
     io.restore();
   });
 
@@ -175,7 +176,7 @@ describe("runCli noninteractive runtime resolution", () => {
         autoCommit: false,
       })}\n`,
     );
-    setPromptAdapter(scriptedPrompts([true, "Refine the CLI prompts"]));
+    setPromptAdapter(scriptedPrompts([true, "Refine the CLI prompts", "Skip"]));
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);
@@ -253,7 +254,7 @@ describe("runCli noninteractive runtime resolution", () => {
         maxCycles: 5,
       })}\n`,
     );
-    setPromptAdapter(scriptedPrompts([true, "Ship the migration"]));
+    setPromptAdapter(scriptedPrompts([true, "Ship the migration", "Skip"]));
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);
@@ -281,6 +282,7 @@ describe("runCli noninteractive runtime resolution", () => {
         "3",
         "high",
         "Audit the API surface",
+        "Skip",
       ]),
     );
     const io = captureOutput();
@@ -298,6 +300,31 @@ describe("runCli noninteractive runtime resolution", () => {
       autoCommit: true,
       effort: "high",
     });
+    io.restore();
+  });
+
+  it("accepts multiline interactive goals", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    mkdirSync(path.join(project, ".kodo"), { recursive: true });
+    writeFileSync(
+      projectConfigPath(project),
+      `${JSON.stringify({
+        team: "full",
+        orchestrator: "api",
+        orchestratorModel: "gpt-5.4",
+        maxExchanges: 30,
+        maxCycles: 5,
+        autoCommit: true,
+      })}\n`,
+    );
+    setPromptAdapter(scriptedPrompts([true, "Line one\n\nLine three", "Skip"]));
+    const io = captureOutput();
+
+    expect(runCli(["--project", project])).toBe(0);
+    expect(io.stdout()).toContain("Goal: Line one Line three");
     io.restore();
   });
 
@@ -328,7 +355,16 @@ describe("runCli noninteractive runtime resolution", () => {
     const project = makeProjectDir();
     writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
     setPromptAdapter(
-      scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]),
+      scriptedPrompts([
+        "full — built-in team",
+        "api",
+        "gpt-5.4",
+        "30",
+        "5",
+        "standard",
+        true,
+        "Skip",
+      ]),
     );
     const io = captureOutput();
 
@@ -347,7 +383,16 @@ describe("runCli noninteractive runtime resolution", () => {
     const project = makeProjectDir();
     writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
     setPromptAdapter(
-      scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]),
+      scriptedPrompts([
+        "full — built-in team",
+        "api",
+        "gpt-5.4",
+        "30",
+        "5",
+        "standard",
+        true,
+        "Skip",
+      ]),
     );
     const io = captureOutput();
 
@@ -355,6 +400,100 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain(`Found existing goal in ${path.join(project, "goal.md")}:`);
     expect(io.stdout()).toContain("Use this goal? [Y/n]");
     io.restore();
+  });
+
+  it("offers stored intake plans for interactive runs", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    mkdirSync(path.join(project, ".kodo", "intake"), { recursive: true });
+    writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
+    writeFileSync(path.join(project, ".kodo", "intake", "goal.md"), "Refactor the auth flow\n");
+    writeFileSync(
+      path.join(project, ".kodo", "intake", "goal-plan.json"),
+      `${JSON.stringify({
+        context: "Auth flow context",
+        stages: [
+          {
+            index: 1,
+            name: "Inspect",
+            description: "Inspect auth flow",
+            acceptance_criteria: "Current auth flow is mapped",
+          },
+          {
+            index: 2,
+            name: "Refactor",
+            description: "Refactor auth flow",
+            acceptance_criteria: "Auth flow is updated",
+          },
+        ],
+      })}\n`,
+    );
+    writeFileSync(projectConfigPath(project), `${JSON.stringify({
+      team: "full",
+      orchestrator: "api",
+      orchestratorModel: "gpt-5.4",
+      maxExchanges: 30,
+      maxCycles: 5,
+      autoCommit: true,
+    })}\n`);
+    setPromptAdapter(scriptedPrompts([true, true, true]));
+    const io = captureOutput();
+
+    expect(runCli(["--project", project])).toBe(0);
+    expect(io.stdout()).toContain("Found existing goal plan (2 stages):");
+    expect(io.stdout()).toContain("Use this goal plan? [Y/n]");
+    expect(io.stdout()).toContain("Reusing stored intake plan (2 stages).");
+    io.restore();
+  });
+
+  it("auto-refines non-interactive goals into goal-refined.md", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship the auth refresh flow", "--auto-refine", "--project", project])).toBe(0);
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    const refinedPath = runId ? path.join(runsRoot(homeDir), runId, "goal-refined.md") : "";
+    const refined = refinedPath ? readFileSync(refinedPath, "utf8") : "";
+    expect(refined).toContain("# Pre-implementation analysis");
+    expect(refined).toContain("Constraints:");
+    expect(io.stdout()).toContain("Auto-refine: surfaced implicit constraints");
+    io.restore();
+  });
+
+  it("skip-intake leaves non-interactive runs without a generated plan", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship the CLI", "--skip-intake", "--project", project])).toBe(0);
+    const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
+    const planPath = runId ? path.join(runsRoot(homeDir), runId, "goal-plan.json") : "";
+    expect(planPath ? existsSync(planPath) : false).toBe(false);
+    expect(io.stdout()).toContain("Skipping intake; using the goal as provided.");
+    io.restore();
+  });
+
+  it("reuses stored intake plans for repeated non-interactive goals", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+
+    const firstIo = captureOutput();
+    expect(runCli(["--goal", "Ship the CLI", "--project", project])).toBe(0);
+    firstIo.restore();
+
+    const secondIo = captureOutput();
+    expect(runCli(["--goal", "Ship the CLI", "--project", project])).toBe(0);
+    expect(secondIo.stdout()).toContain("Using existing goal plan");
+    secondIo.restore();
   });
 
   it("writes a test report for test mode runs", () => {

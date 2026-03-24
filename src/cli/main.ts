@@ -25,6 +25,13 @@ import {
   type SpecializedGoalPlan,
 } from "./specialized.js";
 import {
+  findProjectGoalFile,
+  offerInteractiveIntake,
+  previewExistingGoal,
+  runIntakeAuto,
+  runIntakeNoninteractive,
+} from "./intake.js";
+import {
   loadOrResolveRuntimeParams,
   resolveGoal,
   type ResolvedGoal,
@@ -126,28 +133,16 @@ function readInteractiveGoal(): string {
 
 function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
   const prompt = getPromptAdapter();
-  const projectGoalFile = path.join(projectDir, "goal.md");
-  if (existsSync(projectGoalFile)) {
-    try {
-      const content = normalizeGoalText(readFileSync(projectGoalFile, "utf8"));
-      printLines([
-        "",
-        `Found existing goal in ${projectGoalFile}:`,
-        "----------------------------------------",
-        content.slice(0, 500),
-        ...(content.length > 500 ? ["..."] : []),
-        "----------------------------------------",
-      ]);
+  const projectGoalFile = findProjectGoalFile(projectDir);
+  if (projectGoalFile !== null) {
+    const content = previewExistingGoal(projectGoalFile);
+    if (content !== null) {
       const useExisting = prompt.confirm("Use this goal?", true);
       if (useExisting === null) {
         throw new CliError("Cancelled.");
       }
       if (useExisting) {
         return { goalText: content, source: "interactive" };
-      }
-    } catch (error) {
-      if (error instanceof CliError) {
-        throw error;
       }
     }
   }
@@ -263,13 +258,63 @@ function buildModeGoal(
 
   const goal = resolveGoal(parsed.flags);
   if (goal.goalText !== null) {
+    const normalizedGoal = normalizeGoalText(goal.goalText);
+    if (parsed.flags.autoRefine) {
+      const refined = runIntakeAuto(runDir, normalizedGoal);
+      return {
+        goal: { ...goal, goalText: normalizeGoalText(refined.refinedGoal) },
+        notices: refined.notices,
+        plan: null,
+      };
+    }
+    if (!parsed.flags.skipIntake) {
+      const intake = runIntakeNoninteractive(runDir, normalizedGoal);
+      return {
+        goal: {
+          ...goal,
+          goalText: normalizedGoal,
+        },
+        notices: intake.notices,
+        plan: intake.plan,
+      };
+    }
     return {
-      goal: { ...goal, goalText: normalizeGoalText(goal.goalText) },
-      notices: [],
+      goal: { ...goal, goalText: normalizedGoal },
+      notices: ["Skipping intake; using the goal as provided."],
       plan: null,
     };
   }
-  return { goal: resolveInteractiveGoal(parsed.flags.project), notices: [], plan: null };
+
+  const interactiveGoal = resolveInteractiveGoal(parsed.flags.project);
+  const normalizedGoal = normalizeGoalText(interactiveGoal.goalText ?? "");
+  if (parsed.flags.skipIntake) {
+    return {
+      goal: { ...interactiveGoal, goalText: normalizedGoal },
+      notices: ["Skipping intake; using the goal as provided."],
+      plan: null,
+    };
+  }
+  if (parsed.flags.autoRefine) {
+    const refined = runIntakeAuto(runDir, normalizedGoal);
+    return {
+      goal: { ...interactiveGoal, goalText: normalizeGoalText(refined.refinedGoal) },
+      notices: refined.notices,
+      plan: null,
+    };
+  }
+
+  const intake = offerInteractiveIntake(runDir, normalizedGoal);
+  return {
+    goal: {
+      ...interactiveGoal,
+      goalText:
+        intake.plan !== null
+          ? normalizedGoal
+          : normalizeGoalText(intake.refinedGoal ?? normalizedGoal),
+    },
+    notices: intake.notices,
+    plan: intake.plan,
+  };
 }
 
 function teamAgentNames(teamName: string, projectDir: string): string[] {
@@ -285,7 +330,7 @@ function writeRunArtifacts(
 ): void {
   writeFileSync(runDir.configFile, `${JSON.stringify(params, null, 2)}\n`, "utf8");
   writeFileSync(runDir.goalFile, `${goal.goalText ?? ""}\n`, "utf8");
-  if (goal.source !== "interactive") {
+  if (goal.source !== "interactive" && !existsSync(runDir.goalRefinedFile)) {
     writeFileSync(runDir.goalRefinedFile, `${goal.goalText ?? ""}\n`, "utf8");
   }
   if (plan !== null) {

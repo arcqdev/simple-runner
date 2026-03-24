@@ -247,7 +247,7 @@ describe("runtime integration", () => {
     ).toBe(0);
     expect(io.stdout()).toContain("Run completed.");
     expect(io.stdout()).toContain("Orchestrator: codex (gpt-5.4)");
-    expect(io.stdout()).toContain("Completed task");
+    expect(io.stdout()).toContain("Summary:");
 
     const logFile = io.stdout().match(/Log file: (.+)/u)?.[1];
     expect(logFile).toBeTruthy();

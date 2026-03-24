@@ -15,15 +15,13 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 1. Intake And Goal Refinement
 
-- Full intake flow is not ported.
-  - Missing interactive intake chat.
-  - Missing non-interactive intake planning equivalent to Python.
-  - Missing intake-session reuse behavior.
-  - Missing existing-plan reuse behavior from the Python intake path.
-- `--auto-refine` is not at Python parity.
-  - The flag exists in the TypeScript CLI.
-  - The richer Python auto-refine workflow is not present.
-- `--skip-intake` exists, but there is no full intake system behind it to skip.
+- Core intake flow is now ported in TypeScript.
+  - Interactive goal intake can preview `goal.md`, offer quick refine vs interview, and reuse stored intake artifacts.
+  - Non-interactive `--goal` / `--goal-file` runs can generate and reuse staged plans.
+  - `--auto-refine` now writes a real refined goal artifact instead of acting like a placeholder flag.
+  - `--skip-intake` now skips a real intake path rather than a stub.
+- Remaining delta:
+  - The intake implementation is deterministic/local rather than backend-conversation driven like Python.
 
 ### 2. Runtime Team And Config Resolution
 
@@ -137,21 +135,14 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
   - Missing richer stats presentation driven by Python run accounting.
   - Missing Python-level browser-verified viewer behavior coverage.
 
-### 14. Benchmark Tooling
-
-- Benchmark tooling is not ported.
-  - Missing the benchmark harness.
-  - Missing evaluation/reporting tooling.
-  - Missing the online benchmark support package and related workflows.
-
-### 15. Operational Docs And Support Scripts
+### 14. Operational Docs And Support Scripts
 
 - Supporting operational workflows are thinner than Python.
   - Missing Python-equivalent docs/scripts for resume verification.
   - Missing Python-equivalent docs/scripts for viewer verification.
   - Missing Python’s surrounding support assets for these workflows.
 
-### 16. Test Coverage For Missing Areas
+### 15. Test Coverage For Missing Areas
 
 - The TypeScript repo does not yet have parity-grade test coverage for the missing areas above.
   - Missing summarizer tests.
@@ -198,6 +189,5 @@ These areas appear to exist in usable form already, even if the implementation d
 
 ### Nice To Have Or Separate Track
 
-- Benchmark tooling
 - Operational docs and support scripts
 - Expanded parity tests for all of the above

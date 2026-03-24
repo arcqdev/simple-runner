@@ -19,6 +19,13 @@ export function scriptedPrompts(answers: Array<string | boolean | string[]>): Pr
       }
       return value;
     },
+    multiline() {
+      const value = next();
+      if (typeof value !== "string") {
+        throw new Error(`Expected string prompt answer, received ${typeof value}`);
+      }
+      return value;
+    },
     confirm(message, defaultValue) {
       const value = next();
       if (typeof value !== "boolean") {
