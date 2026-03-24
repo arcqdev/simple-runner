@@ -1,0 +1,38 @@
+{
+  "agentSessionIds": {
+    "backend_agent": "codex-e2e-thread",
+    "frontend_agent": "last"
+  },
+  "agentStats": {
+    "backend_agent": {
+      "calls": 1,
+      "conversationLogs": [
+        "conversations/backend_agent_001.jsonl.gz"
+      ],
+      "costBucket": "codex_subscription",
+      "elapsedS": 0.044,
+      "errors": 0,
+      "inputTokens": 11,
+      "outputTokens": 17
+    },
+    "frontend_agent": {
+      "calls": 1,
+      "conversationLogs": [
+        "conversations/frontend_agent_001.jsonl.gz"
+      ],
+      "costBucket": "gemini_api",
+      "elapsedS": 0.041,
+      "errors": 0,
+      "inputTokens": 13,
+      "outputTokens": 21
+    }
+  },
+  "completedCycles": 2,
+  "completedStages": [],
+  "currentStageCycles": 2,
+  "finished": false,
+  "lastSummary": "frontend implemented and wired to /api/message with built static HTML.",
+  "parallelStageState": {},
+  "pendingExchanges": [],
+  "stageSummaries": []
+}

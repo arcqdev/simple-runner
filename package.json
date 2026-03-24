@@ -11,6 +11,7 @@
     "build": "vite build && chmod +x dist/cli.js dist/viewer-cli.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
     "dev": "vite-node src/cli.ts",
+    "e2e:docker": "docker build -f e2e/docker/Dockerfile -t kodo-simple-e2e . && docker run --rm kodo-simple-e2e",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "ops:analyze-run": "vite-node scripts/analyze-run.ts",

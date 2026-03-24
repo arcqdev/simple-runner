@@ -1,10 +1,24 @@
+import { copyFileSync, mkdirSync } from "node:fs";
 import { builtinModules } from "node:module";
+import path from "node:path";
 import { defineConfig } from "vite";
 
 const external = new Set([
   ...builtinModules,
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
 ]);
+
+const copyQuerySessionHelperPlugin = {
+  name: "copy-query-session-helper",
+  writeBundle() {
+    const distDir = path.resolve("dist");
+    mkdirSync(distDir, { recursive: true });
+    copyFileSync(
+      path.resolve("src/runtime/query-session-helper.mjs"),
+      path.join(distDir, "query-session-helper.mjs"),
+    );
+  },
+};
 
 export default defineConfig({
   build: {
@@ -23,5 +37,9 @@ export default defineConfig({
     },
     sourcemap: true,
     target: "node20",
+  },
+  plugins: [copyQuerySessionHelperPlugin],
+  test: {
+    fileParallelism: false,
   },
 });

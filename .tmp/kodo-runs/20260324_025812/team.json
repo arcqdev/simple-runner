@@ -1,0 +1,27 @@
+{
+  "agents": {
+    "backend_agent": {
+      "backend": "codex",
+      "chrome": false,
+      "description": "Backend agent. Create the Node backend, package scripts, and a dist build pipeline first. If the frontend still needs to be wired, stop with END_CYCLE after the backend scaffold is complete.",
+      "max_turns": 4,
+      "model": "gpt-5.4-mini",
+      "session_timeout_s": 7200,
+      "system_prompt": "Agent notes:\n- Leave a concise summary of what you changed or verified.\n- Name the files you touched or inspected when relevant.\n- Call out blockers instead of silently stopping.",
+      "timeout_s": 120
+    },
+    "frontend_agent": {
+      "backend": "gemini-cli",
+      "chrome": false,
+      "description": "Frontend agent. Create the smallest HTML frontend that fetches /api/message from the backend. Keep the implementation light and stop with GOAL_DONE once the page is wired and ready to build.",
+      "max_turns": 4,
+      "model": "gemini-2.5-flash",
+      "session_timeout_s": 7200,
+      "system_prompt": "Agent notes:\n- Leave a concise summary of what you changed or verified.\n- Name the files you touched or inspected when relevant.\n- Call out blockers instead of silently stopping.",
+      "timeout_s": 120
+    }
+  },
+  "description": "Minimal end-to-end team for Docker verification.",
+  "name": "simple-e2e",
+  "verifiers": {}
+}

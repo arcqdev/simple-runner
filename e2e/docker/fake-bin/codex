@@ -1,0 +1,143 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function writeFile(filePath, content) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
+function appendProof(projectDir, line) {
+  const proofFile = path.join(projectDir, ".e2e", "agent-proof.log");
+  ensureDir(path.dirname(proofFile));
+  fs.appendFileSync(proofFile, `${line}\n`, "utf8");
+}
+
+function parsePrompt(args) {
+  if (args[0] !== "exec") {
+    return "";
+  }
+  if (args[1] === "resume") {
+    return args[3] || "";
+  }
+  return args[1] || "";
+}
+
+function parseProjectDir(args) {
+  const index = args.indexOf("--cd");
+  return index === -1 ? process.cwd() : args[index + 1];
+}
+
+function parseModel(args) {
+  const index = args.indexOf("-m");
+  return index === -1 ? "unknown" : args[index + 1];
+}
+
+function emit(message, model) {
+  console.log(JSON.stringify({ type: "thread.started", thread_id: "codex-e2e-thread" }));
+  console.log(JSON.stringify({ type: "token_count", input_tokens: 11, output_tokens: 17 }));
+  console.log(JSON.stringify({ type: "agent_message", message, model }));
+}
+
+function createBackendFiles(projectDir) {
+  writeFile(
+    path.join(projectDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "simple-e2e-app",
+        private: true,
+        type: "module",
+        scripts: {
+          build: "node build.mjs",
+          start: "node dist/server.mjs",
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+
+  writeFile(
+    path.join(projectDir, "build.mjs"),
+    `import { cpSync, mkdirSync } from "node:fs";
+import path from "node:path";
+
+const root = new URL(".", import.meta.url);
+const distDir = new URL("./dist/", root);
+const publicDir = new URL("./dist/public/", root);
+
+mkdirSync(distDir, { recursive: true });
+mkdirSync(publicDir, { recursive: true });
+cpSync(new URL("./src/server.mjs", root), new URL("./dist/server.mjs", root));
+cpSync(new URL("./src/index.html", root), new URL("./dist/public/index.html", root));
+
+console.log(path.resolve(new URL("./dist", root).pathname));
+`,
+  );
+
+  writeFile(
+    path.join(projectDir, "src", "server.mjs"),
+    `import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const port = Number(process.env.PORT || "3210");
+const indexHtml = readFileSync(path.join(__dirname, "public", "index.html"), "utf8");
+
+const server = createServer((req, res) => {
+  if (req.url === "/api/message") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ message: "hello from the backend" }));
+    return;
+  }
+
+  if (req.url === "/" || req.url === "/index.html") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(indexHtml);
+    return;
+  }
+
+  res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+  res.end("not found");
+});
+
+server.listen(port, "0.0.0.0", () => {
+  console.log("listening on", port);
+});
+`,
+  );
+}
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("codex e2e 0.1.0");
+  process.exit(0);
+}
+
+const projectDir = parseProjectDir(args);
+const prompt = parsePrompt(args);
+const model = parseModel(args);
+
+appendProof(projectDir, `backend_agent codex model=${model}`);
+
+if (prompt.includes("Verify the repository state honestly.")) {
+  emit("ALL CHECKS PASS. Verified generated backend, frontend, and build output.", model);
+  process.exit(0);
+}
+
+if (prompt.includes("You are backend_agent.")) {
+  createBackendFiles(projectDir);
+  emit(
+    "END_CYCLE: backend scaffold created with Node server, package scripts, and build pipeline.",
+    model,
+  );
+  process.exit(0);
+}
+
+emit("GOAL_DONE: codex e2e completed", model);

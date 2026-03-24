@@ -177,47 +177,50 @@ function runQueryHelper(payload: {
   timeoutS?: number;
 }): HelperQueryOutput {
   const startedAt = Date.now();
-  const helper = spawnSync(process.execPath, [queryHelperPath(), "/dev/stdin", "/dev/stdout"], {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-helper-"));
+  const payloadPath = writeTempJson(tempDir, "payload.json", payload);
+  const outputPath = path.join(tempDir, "result.json");
+  const helper = spawnSync(process.execPath, [queryHelperPath(), payloadPath, outputPath], {
     encoding: "utf8",
     env: buildWorkerEnv(),
-    input: `${JSON.stringify(payload)}\n`,
     killSignal: "SIGKILL",
     maxBuffer: MAX_BUFFER_BYTES,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
     timeout: (payload.timeoutS ?? DEFAULT_TIMEOUT_S) * 1000 + 5_000,
   });
 
   const elapsedS = Number(((Date.now() - startedAt) / 1000).toFixed(3));
-  if (isTimeoutError(helper.error ?? null)) {
-    return {
-      elapsedS,
-      inputTokens: null,
-      isError: true,
-      outputTokens: null,
-      text: `${payload.backend}: Process timed out after ${payload.timeoutS ?? DEFAULT_TIMEOUT_S}s. Hint: increase session_timeout_s in TeamConfig.`,
-      usageRaw: null,
-    };
-  }
-
-  const stdout = helper.stdout?.trim() ?? "";
-  if ((helper.status ?? 0) !== 0 || helper.signal !== null || helper.error !== undefined) {
-    return {
-      elapsedS,
-      inputTokens: null,
-      isError: true,
-      outputTokens: null,
-      text: helper.stderr.trim() || stdout || `${payload.backend}: session helper failed`,
-      usageRaw: null,
-    };
-  }
-
   try {
-    const parsed = JSON.parse(stdout) as HelperQueryOutput;
+    if (isTimeoutError(helper.error ?? null)) {
+      return {
+        elapsedS,
+        inputTokens: null,
+        isError: true,
+        outputTokens: null,
+        text: `${payload.backend}: Process timed out after ${payload.timeoutS ?? DEFAULT_TIMEOUT_S}s. Hint: increase session_timeout_s in TeamConfig.`,
+        usageRaw: null,
+      };
+    }
+
+    const stdout = helper.stdout?.trim() ?? "";
+    if ((helper.status ?? 0) !== 0 || helper.signal !== null || helper.error !== undefined) {
+      return {
+        elapsedS,
+        inputTokens: null,
+        isError: true,
+        outputTokens: null,
+        text: helper.stderr.trim() || stdout || `${payload.backend}: session helper failed`,
+        usageRaw: null,
+      };
+    }
+
+    const parsed = JSON.parse(readFileSync(outputPath, "utf8")) as HelperQueryOutput;
     return {
       ...parsed,
       elapsedS: parsed.elapsedS ?? elapsedS,
     };
   } catch {
+    const stdout = helper.stdout?.trim() ?? "";
     return {
       elapsedS,
       inputTokens: null,
@@ -229,6 +232,8 @@ function runQueryHelper(payload: {
         `${payload.backend}: session helper returned malformed JSON`,
       usageRaw: null,
     };
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
   }
 }
 

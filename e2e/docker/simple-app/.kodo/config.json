@@ -1,0 +1,8 @@
+{
+  "autoCommit": false,
+  "maxCycles": 1,
+  "maxExchanges": 1,
+  "orchestrator": "gemini-cli",
+  "orchestratorModel": "gemini-2.5-flash",
+  "team": "simple-e2e"
+}

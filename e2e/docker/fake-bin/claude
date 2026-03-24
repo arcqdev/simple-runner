@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
+
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function writeFile(filePath, content) {
+  ensureDir(path.dirname(filePath));
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
+function appendProof(projectDir, line) {
+  const proofFile = path.join(projectDir, ".e2e", "agent-proof.log");
+  ensureDir(path.dirname(proofFile));
+  fs.appendFileSync(proofFile, `${line}\n`, "utf8");
+}
+
+function parsePrompt(args) {
+  return args.at(-1) || "";
+}
+
+function parseModel(args) {
+  const index = args.indexOf("--model");
+  return index === -1 ? "unknown" : args[index + 1];
+}
+
+function parseProjectDirFromPrompt(prompt) {
+  const match = prompt.match(/Work in the repository at (.+?)\.\n/);
+  return match ? match[1] : process.cwd();
+}
+
+function emit(message, model) {
+  console.log(JSON.stringify({ type: "assistant", message, session_id: "claude-e2e-session", model }));
+}
+
+function createFrontendFiles(projectDir) {
+  writeFile(
+    path.join(projectDir, "src", "index.html"),
+    `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple Runner E2E</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Georgia, "Times New Roman", serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #f4efe6, #d7e9f7);
+        color: #1b1f23;
+      }
+
+      main {
+        width: min(32rem, calc(100vw - 2rem));
+        padding: 2rem;
+        border-radius: 1.25rem;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 18px 50px rgba(22, 34, 51, 0.16);
+      }
+
+      h1 {
+        margin: 0 0 0.75rem;
+        font-size: clamp(2rem, 5vw, 3rem);
+      }
+
+      p {
+        line-height: 1.5;
+      }
+
+      #message {
+        margin-top: 1rem;
+        padding: 0.875rem 1rem;
+        border-radius: 0.875rem;
+        background: #eef6ff;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>Simple Runner E2E</p>
+      <h1>Frontend talks to the backend</h1>
+      <p>The page loads, calls <code>/api/message</code>, and renders the live response below.</p>
+      <div id="message">Loading...</div>
+    </main>
+    <script type="module">
+      const target = document.getElementById("message");
+      const response = await fetch("/api/message");
+      const payload = await response.json();
+      target.textContent = payload.message;
+    </script>
+  </body>
+</html>
+`,
+  );
+}
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("Claude Code CLI e2e 0.1.0");
+  process.exit(0);
+}
+
+const prompt = parsePrompt(args);
+const model = parseModel(args);
+const projectDir = parseProjectDirFromPrompt(prompt);
+
+appendProof(projectDir, `frontend_agent claude model=${model}`);
+
+if (prompt.includes("You are frontend_agent.")) {
+  createFrontendFiles(projectDir);
+  emit(
+    "GOAL_DONE: frontend implemented and wired to /api/message with built static HTML.",
+    model,
+  );
+  process.exit(0);
+}
+
+emit("GOAL_DONE: claude e2e completed", model);

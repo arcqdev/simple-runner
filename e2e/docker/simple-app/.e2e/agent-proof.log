@@ -1,0 +1,4 @@
+backend_agent codex model=gpt-5.4-mini
+frontend_agent gemini-cli model=gemini-2.5-flash
+backend_agent codex model=gpt-5.4-mini
+backend_agent codex model=gpt-5.4-mini

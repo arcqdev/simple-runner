@@ -1,0 +1,8 @@
+{
+  "autoCommit": false,
+  "maxCycles": 3,
+  "maxExchanges": 1,
+  "orchestrator": "codex",
+  "orchestratorModel": "gpt-5.4-mini",
+  "team": "simple-e2e"
+}

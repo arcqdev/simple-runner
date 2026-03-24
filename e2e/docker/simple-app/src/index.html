@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple Runner E2E</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Georgia, "Times New Roman", serif;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, #f4efe6, #d7e9f7);
+        color: #1b1f23;
+      }
+
+      main {
+        width: min(32rem, calc(100vw - 2rem));
+        padding: 2rem;
+        border-radius: 1.25rem;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 18px 50px rgba(22, 34, 51, 0.16);
+      }
+
+      h1 {
+        margin: 0 0 0.75rem;
+        font-size: clamp(2rem, 5vw, 3rem);
+      }
+
+      p {
+        line-height: 1.5;
+      }
+
+      #message {
+        margin-top: 1rem;
+        padding: 0.875rem 1rem;
+        border-radius: 0.875rem;
+        background: #eef6ff;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>Simple Runner E2E</p>
+      <h1>Frontend talks to the backend</h1>
+      <p>The page loads, calls <code>/api/message</code>, and renders the live response below.</p>
+      <div id="message">Loading...</div>
+    </main>
+    <script type="module">
+      const target = document.getElementById("message");
+      const response = await fetch("/api/message");
+      const payload = await response.json();
+      target.textContent = payload.message;
+    </script>
+  </body>
+</html>
