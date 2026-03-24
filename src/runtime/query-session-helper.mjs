@@ -119,7 +119,8 @@ function parseCodexOutput(result) {
     const messageType = stringField(message, "type") ?? stringField(inner, "type") ?? "";
 
     if (messageType === "thread.started") {
-      sessionId = stringField(message, "thread_id") ?? stringField(message, "session_id") ?? sessionId;
+      sessionId =
+        stringField(message, "thread_id") ?? stringField(message, "session_id") ?? sessionId;
       continue;
     }
     if (messageType === "agent_message") {
@@ -224,7 +225,8 @@ function parseGeminiOutput(result) {
     return {
       inputTokens,
       outputTokens,
-      resultText: typeof record.response === "string" ? record.response : JSON.stringify(record.response),
+      resultText:
+        typeof record.response === "string" ? record.response : JSON.stringify(record.response),
       sessionId: inputTokens + outputTokens > 0 ? "last" : null,
     };
   } catch {
@@ -348,10 +350,15 @@ const parsed = adapter.parseOutput({
   stdout: result.stdout ?? "",
 });
 const isError =
-  (result.status ?? 1) !== 0 || result.signal !== null || result.error !== undefined || parsed.isError === true;
+  (result.status ?? 1) !== 0 ||
+  result.signal !== null ||
+  result.error !== undefined ||
+  parsed.isError === true;
 const text =
   parsed.resultText?.trim() ||
-  (isError ? classifySessionError(result, payload.backend, payload.timeoutS ?? DEFAULT_TIMEOUT_S) : "");
+  (isError
+    ? classifySessionError(result, payload.backend, payload.timeoutS ?? DEFAULT_TIMEOUT_S)
+    : "");
 
 writeFileSync(
   outputPath,

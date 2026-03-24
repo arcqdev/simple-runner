@@ -140,8 +140,10 @@ function buildDefaultStages(goalText: string): StageSeed[] {
   const summary = normalizeWhitespace(goalText).slice(0, 120);
   return [
     {
-      acceptanceCriteria: "Relevant code paths, constraints, and integration points are identified before editing.",
-      description: "Inspect the current implementation, map the relevant code paths, and confirm the smallest viable change.",
+      acceptanceCriteria:
+        "Relevant code paths, constraints, and integration points are identified before editing.",
+      description:
+        "Inspect the current implementation, map the relevant code paths, and confirm the smallest viable change.",
       name: "Inspect Current State",
     },
     {
@@ -150,8 +152,10 @@ function buildDefaultStages(goalText: string): StageSeed[] {
       name: "Implement Core Change",
     },
     {
-      acceptanceCriteria: "The new behavior is validated and the run artifacts explain what changed.",
-      description: "Verify the result with targeted tests or checks, then tighten any rough edges before finishing.",
+      acceptanceCriteria:
+        "The new behavior is validated and the run artifacts explain what changed.",
+      description:
+        "Verify the result with targeted tests or checks, then tighten any rough edges before finishing.",
       name: "Verify And Finish",
     },
   ];
@@ -167,13 +171,21 @@ function buildInterviewSummary(
   return [normalizeGoalText(goalText), ...answered].join("\n");
 }
 
-function generateRefinedGoal(goalText: string, projectDir: string, session?: IntakeSession | null): string {
+function generateRefinedGoal(
+  goalText: string,
+  projectDir: string,
+  session?: IntakeSession | null,
+): string {
   const sections: string[] = [normalizeGoalText(goalText)];
   const context: string[] = [];
 
   if (session !== null && session !== undefined) {
-    const constraints = session.answers.find((entry) => entry.prompt === INTERVIEW_QUESTIONS[0])?.answer;
-    const approach = session.answers.find((entry) => entry.prompt === INTERVIEW_QUESTIONS[1])?.answer;
+    const constraints = session.answers.find(
+      (entry) => entry.prompt === INTERVIEW_QUESTIONS[0],
+    )?.answer;
+    const approach = session.answers.find(
+      (entry) => entry.prompt === INTERVIEW_QUESTIONS[1],
+    )?.answer;
     const done = session.answers.find((entry) => entry.prompt === INTERVIEW_QUESTIONS[2])?.answer;
     if (constraints && constraints.length > 0) {
       context.push(`Constraints: ${constraints}`);
@@ -185,9 +197,15 @@ function generateRefinedGoal(goalText: string, projectDir: string, session?: Int
       context.push(`Done means: ${done}`);
     }
   } else {
-    context.push("Constraints: stay within the existing project structure unless the goal explicitly requires a larger refactor.");
-    context.push("Preferred approach: choose the smallest coherent implementation path and keep the surface area tight.");
-    context.push("Done means: the behavior is implemented, verified, and explained in the run artifacts.");
+    context.push(
+      "Constraints: stay within the existing project structure unless the goal explicitly requires a larger refactor.",
+    );
+    context.push(
+      "Preferred approach: choose the smallest coherent implementation path and keep the surface area tight.",
+    );
+    context.push(
+      "Done means: the behavior is implemented, verified, and explained in the run artifacts.",
+    );
   }
 
   sections.push("# Pre-implementation analysis");
@@ -199,10 +217,17 @@ function generateRefinedGoal(goalText: string, projectDir: string, session?: Int
   return `${sections.join("\n\n")}\n`;
 }
 
-function generatePlan(goalText: string, projectDir: string, session?: IntakeSession | null): SpecializedGoalPlan {
+function generatePlan(
+  goalText: string,
+  projectDir: string,
+  session?: IntakeSession | null,
+): SpecializedGoalPlan {
   const seeds = extractListedStages(goalText);
   const stageSeeds = seeds.length > 0 ? seeds : buildDefaultStages(goalText);
-  const contextLines = [inferProjectContext(projectDir), `Goal summary: ${normalizeWhitespace(goalText)}`];
+  const contextLines = [
+    inferProjectContext(projectDir),
+    `Goal summary: ${normalizeWhitespace(goalText)}`,
+  ];
   if (session !== null && session !== undefined) {
     for (const answer of session.answers) {
       if (answer.answer.length > 0) {
@@ -231,15 +256,27 @@ function writeArtifacts(runDir: RunDir, artifacts: IntakeArtifacts): void {
   }
 }
 
-function persistProjectArtifacts(projectDir: string, goalText: string, artifacts: IntakeArtifacts): void {
+function persistProjectArtifacts(
+  projectDir: string,
+  goalText: string,
+  artifacts: IntakeArtifacts,
+): void {
   const storeDir = intakeStoreDir(projectDir);
   mkdirSync(storeDir, { recursive: true });
   writeFileSync(intakeGoalFile(projectDir), `${normalizeGoalText(goalText)}\n`, "utf8");
   if (artifacts.refinedGoal !== null) {
-    writeFileSync(intakeRefinedFile(projectDir), `${normalizeGoalText(artifacts.refinedGoal)}\n`, "utf8");
+    writeFileSync(
+      intakeRefinedFile(projectDir),
+      `${normalizeGoalText(artifacts.refinedGoal)}\n`,
+      "utf8",
+    );
   }
   if (artifacts.plan !== null) {
-    writeFileSync(intakePlanFile(projectDir), `${JSON.stringify(artifacts.plan, null, 2)}\n`, "utf8");
+    writeFileSync(
+      intakePlanFile(projectDir),
+      `${JSON.stringify(artifacts.plan, null, 2)}\n`,
+      "utf8",
+    );
   }
 }
 
@@ -263,7 +300,10 @@ function parsePlan(text: string): SpecializedGoalPlan | null {
   }
 }
 
-function storedArtifactsForGoal(projectDir: string, goalText: string): StoredIntakeArtifacts | null {
+function storedArtifactsForGoal(
+  projectDir: string,
+  goalText: string,
+): StoredIntakeArtifacts | null {
   const storedGoal = safeReadTrimmed(intakeGoalFile(projectDir));
   if (storedGoal === null || normalizeGoalText(storedGoal) !== normalizeGoalText(goalText)) {
     return null;
@@ -305,7 +345,10 @@ function useStoredArtifactsInteractively(
 
   const prompt = getPromptAdapter();
   if (stored.plan !== null) {
-    printPlanPreview(stored.plan, `Found existing goal plan (${stored.plan.stages.length} stages):`);
+    printPlanPreview(
+      stored.plan,
+      `Found existing goal plan (${stored.plan.stages.length} stages):`,
+    );
     const usePlan = prompt.confirm("Use this goal plan?", true);
     if (usePlan === null) {
       throw new CliError("Cancelled.");
@@ -373,7 +416,10 @@ export function previewExistingGoal(goalFile: string): string | null {
   return content;
 }
 
-export function runIntakeAuto(runDir: RunDir, goalText: string): { notices: string[]; refinedGoal: string } {
+export function runIntakeAuto(
+  runDir: RunDir,
+  goalText: string,
+): { notices: string[]; refinedGoal: string } {
   const refinedGoal = generateRefinedGoal(goalText, runDir.projectDir, null);
   const artifacts = { plan: null, refinedGoal };
   writeArtifacts(runDir, artifacts);
@@ -441,7 +487,12 @@ export function offerInteractiveIntake(runDir: RunDir, goalText: string): Intake
     throw new CliError("Cancelled.");
   }
   if (choice === "Skip") {
-    return { notices: ["Skipping intake; using the goal as provided."], plan: null, refinedGoal: null, session: null };
+    return {
+      notices: ["Skipping intake; using the goal as provided."],
+      plan: null,
+      refinedGoal: null,
+      session: null,
+    };
   }
 
   printLines([
@@ -472,10 +523,7 @@ export function offerInteractiveIntake(runDir: RunDir, goalText: string): Intake
     summary: buildInterviewSummary(goalText, answers),
   };
   const defaultBreakIntoStages = extractListedStages(goalText).length >= 2;
-  const staged = prompt.confirm(
-    "Break into stages?",
-    defaultBreakIntoStages,
-  );
+  const staged = prompt.confirm("Break into stages?", defaultBreakIntoStages);
   if (staged === null) {
     throw new CliError("Cancelled.");
   }

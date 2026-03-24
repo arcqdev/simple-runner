@@ -81,7 +81,9 @@ describe("runCli noninteractive runtime resolution", () => {
     const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
     expect(runId).toBeTruthy();
     expect(runId ? existsSync(path.join(runsRoot(homeDir), runId, "goal.md")) : false).toBe(true);
-    expect(runId ? existsSync(path.join(runsRoot(homeDir), runId, "goal-plan.json")) : false).toBe(true);
+    expect(runId ? existsSync(path.join(runsRoot(homeDir), runId, "goal-plan.json")) : false).toBe(
+      true,
+    );
     io.restore();
   });
 
@@ -458,14 +460,17 @@ describe("runCli noninteractive runtime resolution", () => {
         ],
       })}\n`,
     );
-    writeFileSync(projectConfigPath(project), `${JSON.stringify({
-      team: "full",
-      orchestrator: "api",
-      orchestratorModel: "gpt-5.4",
-      maxExchanges: 30,
-      maxCycles: 5,
-      autoCommit: true,
-    })}\n`);
+    writeFileSync(
+      projectConfigPath(project),
+      `${JSON.stringify({
+        team: "full",
+        orchestrator: "api",
+        orchestratorModel: "gpt-5.4",
+        maxExchanges: 30,
+        maxCycles: 5,
+        autoCommit: true,
+      })}\n`,
+    );
     setPromptAdapter(scriptedPrompts([true, true, true]));
     const io = captureOutput();
 
@@ -483,7 +488,9 @@ describe("runCli noninteractive runtime resolution", () => {
     const project = makeProjectDir();
     const io = captureOutput();
 
-    expect(runCli(["--goal", "Ship the auth refresh flow", "--auto-refine", "--project", project])).toBe(0);
+    expect(
+      runCli(["--goal", "Ship the auth refresh flow", "--auto-refine", "--project", project]),
+    ).toBe(0);
     const runId = io.stdout().match(/Run ID: (\S+)/u)?.[1];
     const refinedPath = runId ? path.join(runsRoot(homeDir), runId, "goal-refined.md") : "";
     const refined = refinedPath ? readFileSync(refinedPath, "utf8") : "";

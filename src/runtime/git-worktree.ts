@@ -61,16 +61,17 @@ function runGit(
 }
 
 function sanitizeLabel(label: string): string {
-  const sanitized = label.trim().replaceAll(/[/@:^~?*[\\\s]+/gu, "_").replaceAll(/_+/gu, "_");
+  const sanitized = label
+    .trim()
+    .replaceAll(/[/@:^~?*[\\\s]+/gu, "_")
+    .replaceAll(/_+/gu, "_");
   return sanitized.length > 0 ? sanitized : "stage";
 }
 
 function stripPycacheFromIndex(repoDir: string): void {
-  const cached = runGit(
-    repoDir,
-    ["ls-files", "--cached", "-z", "*/__pycache__/*", "*.pyc"],
-    { allowFailure: true },
-  );
+  const cached = runGit(repoDir, ["ls-files", "--cached", "-z", "*/__pycache__/*", "*.pyc"], {
+    allowFailure: true,
+  });
   const files = cached.output.split("\0").filter((entry) => entry.length > 0);
   if (files.length === 0) {
     return;
@@ -118,7 +119,9 @@ function cleanupOrphanedBranches(projectDir: string, activeBranches: Set<string>
 export function createWorktree(projectDir: string, label: string): WorktreeHandle {
   const sanitizedLabel = sanitizeLabel(label);
   const branchName = `${WORKTREE_BRANCH_PREFIX}${sanitizedLabel}-${randomUUID().replaceAll("-", "").slice(0, 8)}`;
-  const worktreeDir = mkdtempSync(path.join(os.tmpdir(), `${WORKTREE_BRANCH_PREFIX}${sanitizedLabel}-`));
+  const worktreeDir = mkdtempSync(
+    path.join(os.tmpdir(), `${WORKTREE_BRANCH_PREFIX}${sanitizedLabel}-`),
+  );
 
   removeWorktreeDirectoryIfPresent(worktreeDir);
   try {
@@ -290,7 +293,9 @@ export function mergeWorktreeBranch(
   }
 
   stripPycacheFromIndex(projectDir);
-  if (runGit(projectDir, ["status", "--porcelain"], { allowFailure: true }).output.trim().length > 0) {
+  if (
+    runGit(projectDir, ["status", "--porcelain"], { allowFailure: true }).output.trim().length > 0
+  ) {
     runGit(projectDir, ["commit", "-m", "kodo: strip __pycache__ before merge"], {
       allowFailure: true,
     });
@@ -304,7 +309,9 @@ export function mergeWorktreeBranch(
   }
 
   stripPycacheFromIndex(projectDir);
-  if (runGit(projectDir, ["status", "--porcelain"], { allowFailure: true }).output.trim().length > 0) {
+  if (
+    runGit(projectDir, ["status", "--porcelain"], { allowFailure: true }).output.trim().length > 0
+  ) {
     runGit(projectDir, ["commit", "-m", "kodo: strip __pycache__ from main"], {
       allowFailure: true,
     });

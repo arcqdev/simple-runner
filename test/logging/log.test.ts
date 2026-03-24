@@ -5,7 +5,14 @@ import { gunzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { emit, getLogFile, init, initAppend, RunDir, saveConversation } from "../../src/logging/log.js";
+import {
+  emit,
+  getLogFile,
+  init,
+  initAppend,
+  RunDir,
+  saveConversation,
+} from "../../src/logging/log.js";
 import { parseRun } from "../../src/logging/runs.js";
 
 function makeTempDir(): string {

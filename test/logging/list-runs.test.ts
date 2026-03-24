@@ -33,7 +33,11 @@ function writeEvents(
 function writeRuntimeState(homeDir: string, runId: string, state: Record<string, unknown>): void {
   const runDir = path.join(homeDir, ".kodo", "runs", runId);
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(path.join(runDir, "runtime-state.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  writeFileSync(
+    path.join(runDir, "runtime-state.json"),
+    `${JSON.stringify(state, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 afterEach(() => {

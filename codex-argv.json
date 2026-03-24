@@ -1,0 +1,15 @@
+[
+  "exec",
+  "resume",
+  "thread-1",
+  "continue",
+  "--full-auto",
+  "--json",
+  "--cd",
+  "/var/folders/yc/_tf8589d3fs7rt5m5k63cwl40000gn/T/kodo-project-1774318222335-p9hk0jps5ss",
+  "--skip-git-repo-check",
+  "--sandbox",
+  "workspace-write",
+  "-m",
+  "gpt-5.4"
+]

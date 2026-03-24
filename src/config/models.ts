@@ -213,7 +213,9 @@ export function listOllamaModels(env = process.env): string[] {
   }
   try {
     const parsed = JSON.parse(child.stdout.trim()) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string")
+      : [];
   } catch {
     return [];
   }
@@ -263,7 +265,10 @@ export function defaultApiModel(env = process.env): string {
   return "gpt-5.4";
 }
 
-export function checkApiKeyForModel(model: string | null | undefined, env = process.env): string | null {
+export function checkApiKeyForModel(
+  model: string | null | undefined,
+  env = process.env,
+): string | null {
   if (!model) {
     return null;
   }

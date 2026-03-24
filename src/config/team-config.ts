@@ -139,7 +139,11 @@ function resolvedSystemPrompt(agentKey: string, explicitPrompt?: string): string
   return `${base}${AGENT_NOTES_INSTRUCTION}`.trim();
 }
 
-function normalizedAgentConfig(agentKey: string, agentConfig: unknown, sourcePath: string): TeamAgentConfig {
+function normalizedAgentConfig(
+  agentKey: string,
+  agentConfig: unknown,
+  sourcePath: string,
+): TeamAgentConfig {
   if (typeof agentConfig !== "object" || agentConfig === null || Array.isArray(agentConfig)) {
     throw new Error(`Agent '${agentKey}' config must be an object in ${sourcePath}`);
   }

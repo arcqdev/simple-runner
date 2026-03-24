@@ -234,7 +234,9 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
   }
 
   const defaultChoice =
-    modelChoices.find((choice) => choice.startsWith(`${defaultModel} —`) || choice === defaultModel) ??
+    modelChoices.find(
+      (choice) => choice.startsWith(`${defaultModel} —`) || choice === defaultModel,
+    ) ??
     modelChoices[0] ??
     defaultModel;
   const selectedModel = prompt.select("Orchestrator model:", modelChoices, defaultChoice);
@@ -261,7 +263,9 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
   if (isOllamaLike(orchestratorModel)) {
     orchestratorModel = normalizeOllamaModel(orchestratorModel);
   }
-  const keyError = genericApiKeyError(orchestrator, orchestratorModel) ?? checkApiKey(orchestrator, orchestratorModel);
+  const keyError =
+    genericApiKeyError(orchestrator, orchestratorModel) ??
+    checkApiKey(orchestrator, orchestratorModel);
   if (keyError !== null) {
     throw new CliError(`${keyError}\nSet the key in your environment or .env file and try again.`);
   }
