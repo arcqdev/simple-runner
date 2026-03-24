@@ -178,7 +178,8 @@ export function parseRun(logFile: string): RunState | null {
     maxCycles: numberField(runStart, "max_cycles") ?? numberField(cliArgs, "max_cycles") ?? 0,
     maxExchanges:
       numberField(runStart, "max_exchanges") ?? numberField(cliArgs, "max_exchanges") ?? 0,
-    model: stringField(runStart, "model") ?? stringField(cliArgs, "orchestrator_model") ?? "unknown",
+    model:
+      stringField(runStart, "model") ?? stringField(cliArgs, "orchestrator_model") ?? "unknown",
     orchestrator:
       stringField(runStart, "orchestrator") ?? stringField(cliArgs, "orchestrator") ?? "unknown",
     projectDir: stringField(runStart, "project_dir") ?? stringField(cliArgs, "project_dir") ?? "",

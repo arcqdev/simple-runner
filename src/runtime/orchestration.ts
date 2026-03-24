@@ -193,14 +193,19 @@ function composeStageGoal(plan: GoalPlan, stage: GoalStage, completedSummaries: 
       parts.push(`## Stage ${index + 1}\n${summary}`);
     }
   }
-  parts.push(`# Current Stage (${stage.index}/${plan.stages.length}): ${stage.name}\n${stage.description}`);
+  parts.push(
+    `# Current Stage (${stage.index}/${plan.stages.length}): ${stage.name}\n${stage.description}`,
+  );
   if (stage.acceptance_criteria) {
     parts.push(`## Acceptance Criteria\n${stage.acceptance_criteria}`);
   }
   return parts.join("\n\n");
 }
 
-function parseDoneDirective(text: string): { summary: string; terminal: "end_cycle" | "goal_done" | "raise_issue" } {
+function parseDoneDirective(text: string): {
+  summary: string;
+  terminal: "end_cycle" | "goal_done" | "raise_issue";
+} {
   const trimmed = text.trim();
   const lines = trimmed.split(/\r?\n/gu).map((line) => line.trim());
   for (const line of lines) {
@@ -211,7 +216,10 @@ function parseDoneDirective(text: string): { summary: string; terminal: "end_cyc
       return { summary: line.slice("END_CYCLE:".length).trim() || trimmed, terminal: "end_cycle" };
     }
     if (line.startsWith("RAISE_ISSUE:")) {
-      return { summary: line.slice("RAISE_ISSUE:".length).trim() || trimmed, terminal: "raise_issue" };
+      return {
+        summary: line.slice("RAISE_ISSUE:".length).trim() || trimmed,
+        terminal: "raise_issue",
+      };
     }
   }
   return { summary: trimmed, terminal: "end_cycle" };
@@ -246,7 +254,11 @@ function buildWorkerPrompt(
   ].join("\n");
 }
 
-function buildVerificationPrompt(goal: string, summary: string, acceptanceCriteria?: string): string {
+function buildVerificationPrompt(
+  goal: string,
+  summary: string,
+  acceptanceCriteria?: string,
+): string {
   return [
     "The implementation agent claims this work is complete.",
     "",
@@ -356,17 +368,25 @@ function collectRuntimeAgents(
       });
       emitLogEvent("orchestrator_fallback", {
         orchestrator: params.orchestrator,
-        reason: "No available worker backends in selected team; using orchestrator backend as worker",
+        reason:
+          "No available worker backends in selected team; using orchestrator backend as worker",
       });
     }
   }
 
-  const reviewerAgents = [...groups.testerNames, ...groups.browserTesterNames, ...groups.reviewerNames]
+  const reviewerAgents = [
+    ...groups.testerNames,
+    ...groups.browserTesterNames,
+    ...groups.reviewerNames,
+  ]
     .map((name) => runtimeAgents.get(name))
     .filter((agent): agent is RuntimeAgent => agent !== undefined);
 
   return {
-    allAgents: [...runtimeAgents.values(), ...workerAgents.filter((agent) => !runtimeAgents.has(agent.name))],
+    allAgents: [
+      ...runtimeAgents.values(),
+      ...workerAgents.filter((agent) => !runtimeAgents.has(agent.name)),
+    ],
     reviewerAgents,
     workerAgents,
   };
@@ -511,7 +531,11 @@ function runSingleGoal(
 
   let priorSummary = state.lastSummary;
   try {
-    for (let cycleIndex = state.completedCycles + 1; cycleIndex <= params.maxCycles; cycleIndex += 1) {
+    for (
+      let cycleIndex = state.completedCycles + 1;
+      cycleIndex <= params.maxCycles;
+      cycleIndex += 1
+    ) {
       state.currentStageCycles += 1;
       writeRunStatus(flags.project, goalText, {
         cycleNum: state.currentStageCycles,
@@ -554,7 +578,8 @@ function runSingleGoal(
         status: response.isError ? "failed" : "completed",
       });
 
-      state.agentSessionIds[worker.name] = worker.session.sessionId ?? state.agentSessionIds[worker.name] ?? "";
+      state.agentSessionIds[worker.name] =
+        worker.session.sessionId ?? state.agentSessionIds[worker.name] ?? "";
       const directive = parseDoneDirective(response.text);
       let finished = false;
       let summary = cycleSummary(directive.summary || response.text);
@@ -649,7 +674,11 @@ function runPlan(
   plan: GoalPlan,
 ): OrchestrationResult {
   emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
-  emitLogEvent("planning_end", { has_plan: true, mode: goal.source, num_stages: plan.stages.length });
+  emitLogEvent("planning_end", {
+    has_plan: true,
+    mode: goal.source,
+    num_stages: plan.stages.length,
+  });
 
   let summary = state.lastSummary;
   for (const stage of plan.stages) {

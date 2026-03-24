@@ -236,7 +236,10 @@ describe("runtime orchestration", () => {
     });
 
     spawnSync("git", ["init"], { cwd: projectDir, stdio: "ignore" });
-    spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: projectDir, stdio: "ignore" });
+    spawnSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: projectDir,
+      stdio: "ignore",
+    });
     spawnSync("git", ["config", "user.name", "Test User"], { cwd: projectDir, stdio: "ignore" });
     writeFileSync(path.join(projectDir, "README.md"), "seed\n", "utf8");
     spawnSync("git", ["add", "README.md"], { cwd: projectDir, stdio: "ignore" });

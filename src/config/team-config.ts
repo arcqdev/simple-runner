@@ -5,7 +5,13 @@ import path from "node:path";
 import fullTeam from "../defaults/team-full.json";
 import quickTeam from "../defaults/team-quick.json";
 import testTeam from "../defaults/team-test.json";
-import { type BackendKey, availableBackends, isBackendKey, smartModelForBackend, type TeamBackend } from "../runtime/backends.js";
+import {
+  type BackendKey,
+  availableBackends,
+  isBackendKey,
+  smartModelForBackend,
+  type TeamBackend,
+} from "../runtime/backends.js";
 
 export type TeamAgentConfig = {
   backend: TeamBackend;
@@ -128,7 +134,11 @@ export function listAvailableTeams(homeDir = os.homedir()): TeamListing[] {
   return [...teams.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function getTeamByName(name: string, homeDir = os.homedir(), projectDir?: string): TeamListing | null {
+export function getTeamByName(
+  name: string,
+  homeDir = os.homedir(),
+  projectDir?: string,
+): TeamListing | null {
   if (projectDir !== undefined) {
     const projectPath = projectTeamConfigPath(projectDir);
     try {
@@ -160,7 +170,11 @@ export function describeTeamStatus(config: TeamConfig): { hasMissing: boolean; l
   for (const [agentKey, agentConfig] of Object.entries(config.agents)) {
     const backend = agentConfig.backend ?? "?";
     const backendKey = TEAM_BACKEND_MAP[backend as TeamBackend];
-    const model = agentConfig.model ?? (backendKey && isBackendKey(backendKey) ? `default (${smartModelForBackend(backendKey)})` : "default");
+    const model =
+      agentConfig.model ??
+      (backendKey && isBackendKey(backendKey)
+        ? `default (${smartModelForBackend(backendKey)})`
+        : "default");
     const ok = backendKey !== "" && isBackendKey(backendKey) ? backends[backendKey] : false;
     if (!ok) {
       hasMissing = true;
@@ -175,10 +189,15 @@ export function describeTeamStatus(config: TeamConfig): { hasMissing: boolean; l
   return { hasMissing, lines };
 }
 
-export function generateAutoTeam(modeName: string, homeDir = os.homedir()): { config: TeamConfig; skipped: Array<{ agent: string; backend: string }> } {
+export function generateAutoTeam(
+  modeName: string,
+  homeDir = os.homedir(),
+): { config: TeamConfig; skipped: Array<{ agent: string; backend: string }> } {
   const listing = getTeamByName(modeName, homeDir);
   if (listing === null) {
-    const available = listAvailableTeams(homeDir).map((team) => team.name).join(", ");
+    const available = listAvailableTeams(homeDir)
+      .map((team) => team.name)
+      .join(", ");
     throw new Error(`No template found for mode '${modeName}'.\nAvailable templates: ${available}`);
   }
 
@@ -250,7 +269,10 @@ export function generateAutoTeam(modeName: string, homeDir = os.homedir()): { co
   }
 
   const verifiers = Object.fromEntries(
-    Object.entries(listing.config.verifiers ?? {}).map(([role, agentKeys]) => [role, agentKeys.filter((agentKey) => agentKey in agents)]),
+    Object.entries(listing.config.verifiers ?? {}).map(([role, agentKeys]) => [
+      role,
+      agentKeys.filter((agentKey) => agentKey in agents),
+    ]),
   );
 
   return {

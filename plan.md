@@ -1,362 +1,203 @@
-# TypeScript Migration Checklist for `kodo`
-
-## Goal
-
-Turn this repository into the TypeScript implementation of [`/Users/eddie/dev/arcqdev/kodo`](/Users/eddie/dev/arcqdev/kodo), replacing the current placeholder CLI with a feature-complete Node.js/TypeScript port of the Python application.
+# Missing Functionality Vs `../kodo`
 
 Baseline:
 
-- Source of truth: `/Users/eddie/dev/arcqdev/kodo`
-- Baseline date: March 22, 2026
-- Python version baseline: `0.4.261`
-
-## Success Criteria
-
-- [x] `npm run build` passes in this repo.
-- [x] `npm run typecheck` passes in this repo.
-- [x] `npm run lint` passes in this repo.
-- [x] `npm run test` passes in this repo.
-- [ ] The `kodo` CLI in this repo supports the same user-facing commands, subcommands, aliases, flags, and documented entrypoints as the Python CLI.
-- [ ] User-visible behavior matches the Python implementation feature-for-feature.
-- [ ] Core workflows work end-to-end: goal run, `test`, `improve`, `resume`, run listing, and log viewing.
-- [ ] Backend integrations required for normal usage work from Node with the same lifecycle and failure behavior.
-- [ ] Existing Python behavior is covered by TS regression tests or parity fixtures for the critical paths.
-- [x] A checked-in parity matrix exists for the migrated surface.
-- [x] A checked-in test migration matrix exists.
-- [ ] No normal user workflow requires the Python repo at cutover.
-- [ ] The README and install flow point to the TypeScript package as the primary implementation.
-
-## Phase 0: Discovery and Parity Contract
-
-Deliverables:
-
-- [x] Audit the Python CLI surface and produce a command/flag parity matrix.
-- [x] Audit all user-visible runtime behavior, not just CLI syntax.
-- [x] Produce a complete feature inventory for every documented and shipped user-visible surface.
-- [x] Audit the Python test suite and produce a TS parity test migration matrix.
-- [x] Identify external dependencies and their Node equivalents.
-- [x] Decide which behaviors are exact-parity vs intentionally revised.
-- [x] Freeze the first migration target to the current Python repo state.
-
-Concrete tasks:
-
-- [x] Enumerate core CLI commands, aliases, and top-level flags used to drive the TS shell.
-- [x] Enumerate all CLI commands, aliases, flags, defaults, and JSON output shapes exhaustively.
-  - [x] Enumerate all subcommands and secondary entrypoints:
-  - [x] `runs`, `logs`, `issue`, `backends`, `teams`, `update`
-  - [x] `teams add`, `teams edit`, `teams auto`
-  - [x] standalone viewer invocation paths
-  - [x] singular/plural command aliases
-  - [x] `test` / `improve` alias routing
-- [x] Enumerate and port initial user-visible option validation for:
-  - [x] `--debug`
-  - [x] `--resume`
-  - [x] `--fix-from`
-  - [x] `--skip-intake`
-  - [x] `--auto-refine`
-  - [x] `--no-auto-commit`
-  - [x] `--effort`
-  - [x] `--focus`
-  - [x] `--target`
-  - [x] `--orchestrator-model` alias handling via TS parser
-- [x] Enumerate all user-visible outputs and artifacts:
-  - [x] help/version shell
-  - [x] JSON validation error mode
-  - [x] terminal prompts and summaries
-  - [x] banners, warnings, hints, and next-step messages
-  - [x] report file names and sections
-  - [x] run directory layout
-  - [x] log event shapes
-  - [x] viewer expectations
-  - [x] resume behavior and session recovery semantics
-- [x] Catalog filesystem layout for runs, logs, cached state, defaults, and generated artifacts.
-- [x] Catalog environment variables and backend credential expectations.
-- [x] Record which Python tests define critical behavior that must be mirrored first.
-- [x] Classify the Python tests by migration status:
-  - [x] `port-direct`
-  - [x] `rewrite-equivalent`
-  - [x] `retire-python-only`
-
-Exit criteria:
-
-- [x] A checked-in migration matrix exists.
-- [x] A checked-in parity matrix identifies the currently known user-visible feature set and migration status.
-- [x] The parity matrix is exhaustive enough that removing any shipped Python user feature would show up as a gap, not as an implicit omission.
-- [x] A checked-in test migration matrix maps the Python test suite to planned TS test files.
-- [ ] No unresolved runtime choice remains for any core dependency path.
-  - Documented remaining choices are now explicit instead of implicit:
-  - Prompt/banner wording parity remains scheduled work in Phase 4 and Phase 12.
-  - Viewer HTML richness, trace upload affordances, and expanded event coverage remain scheduled work in Phase 5.
-  - Backend credential handling, session-id resume, and env propagation remain scheduled work in Phase 6.
-
-## Phase 1: Test Harness and Suite Skeleton
-
-Deliverables:
-
-- [x] TS test tree mirrors the major structure of `../kodo/tests`.
-- [x] Shared test helpers exist for captured CLI output.
-- [ ] Shared subprocess harness, mocked backend processes, fixture projects, weird filename fixtures, and run/log fixture builders exist.
-- [x] Highest-value parity tests are checked in before broader implementation continues.
-
-Concrete tasks:
-
-- [x] Create test directories mirroring Python coverage:
-  - [x] `test/cli`
-  - [x] `test/config`
-  - [x] `test/logging`
-  - [x] `test/sessions`
-  - [x] `test/orchestrators`
-  - [x] `test/knowledge`
-  - [x] `test/integration`
-  - [x] `test/regression`
-  - [x] `test/fixtures`
-  - [x] `test/helpers`
-- [ ] Port or recreate the Python test harness patterns:
-  - [ ] subprocess CLI runner
-  - [ ] mocked backend processes
-  - [ ] fixture projects
-  - [ ] weird filename fixtures
-  - [ ] run/log fixture builders
-- [x] Check in the first translated parity tests before broad implementation:
-  - [x] CLI argument audit coverage
-  - [x] help / version coverage
-  - [x] JSON mode validation behavior
-  - [x] run listing / resume selection
-  - [x] backend status / team listing shape
-- [x] Add conventions for test naming so TS files can be mapped back to Python sources via the migration matrix.
-
-Exit criteria:
-
-- [x] The TS test suite structure visibly covers the same major product areas as the Python suite.
-- [ ] The repo has enough test harness infrastructure to port Python behavioral tests incrementally without re-inventing helpers every phase.
-
-## Phase 2: Runtime Foundation
-
-Deliverables:
-
-- [x] Node/TS runtime conventions finalized.
-- [x] Base library dependencies installed.
-- [x] Shared utilities and domain types created for the current CLI shell.
-
-Concrete tasks:
-
-- [x] Choose core libraries for prompts, validation, env loading, and process execution.
-- [x] Add structured CLI error handling and JSON serialization helpers.
-- [x] Add path-safe filesystem helpers beyond the current CLI parser checks.
-- [x] Define shared TS types for runs, sessions, messages, goals, plans, findings, and reports.
-- [x] Create JSON serialization helpers for machine-readable runtime mode.
-
-Notes:
-
-- Phase 2 standardizes on the Node.js standard library plus the existing TypeScript/Vitest toolchain for prompts, validation, env access, and process execution. No extra runtime dependency is required yet; backend/session-specific libraries remain Phase 6 work if the stdlib stops being sufficient.
-
-Exit criteria:
-
-- [x] Strict type-safe primitives exist for core runtime models.
-- [x] The repo can support multiple subsystems without ad hoc local types.
-
-## Phase 3: CLI Shell Parity
-
-Deliverables:
-
-- [x] Real CLI argument handling replaces the placeholder implementation.
-- [x] Help text, version output, command aliases, and JSON error mode behave correctly for the implemented shell.
-
-Concrete tasks:
-
-- [x] Port the CLI shell behavior from `kodo/cli/_main.py`.
-- [x] Implement command aliases such as `kodo test` / `kodo improve`.
-- [x] Implement top-level subcommand routing for `runs`, `logs`, `backends`, `teams`, `update`, `help`, and `issue`.
-- [x] Implement the current singular/plural aliases:
-  - [x] `run` / `runs`
-  - [x] `log` / `logs`
-  - [x] `team` / `teams`
-  - [x] `backend` / `backends`
-  - [x] `issue` / `issues`
-- [x] Implement functional `teams add`, `teams edit`, and `teams auto`.
-- [x] Implement initial non-interactive flags and validation rules.
-- [ ] Port prompt/confirmation behavior and printed summaries fully.
-- [x] Preserve exit-code behavior for current validation failures and JSON error formatting.
-
-Exit criteria:
-
-- [ ] Current TS CLI accepts the same full top-level commands, subcommands, aliases, and flags as Python.
-- [x] CLI unit tests cover parsing, help, version, errors, JSON mode, and alias routing.
-- [ ] CLI unit tests cover prompt flow and full exit-code parity.
-
-## Phase 4: Config, Defaults, and Intake
-
-Deliverables:
-
-- [ ] Goal loading, intake, refinement, team selection, and parameter resolution work.
-
-Concrete tasks:
-
-- [ ] Port `team_config.py`.
-- [ ] Port `user_config.py`.
-- [ ] Port `factory.py`.
-- [ ] Move JSON defaults from Python package data into TS-readable assets.
-- [ ] Port `cli/_intake.py`.
-- [ ] Port `cli/_params.py`.
-- [ ] Recreate interactive flows with equivalent prompts and summaries.
-- [ ] Preserve default team/orchestrator selection and non-interactive coercions exactly.
-
-Exit criteria:
-
-- [ ] A user can start a configured run from the TS CLI without placeholder behavior.
-
-## Phase 5: Run State, Logging, Resume, and Viewer
-
-Deliverables:
-
-- [ ] Run directories, logs, replay metadata, run discovery, and resume bookkeeping exist in TS.
-
-Concrete tasks:
-
-- [ ] Port run directory management.
-- [x] Port run parsing and listing.
-- [x] Add initial JSONL log init/append/emit helpers with regression tests.
-- [ ] Port stats/report helpers.
-- [ ] Port replay/log formatting.
-- [x] Port `viewer.py` and standalone viewer entrypoint behavior.
-- [ ] Port `viewer.html` and trace upload support.
-- [ ] Port resume path expectations used by the CLI and orchestrators.
-- [ ] Preserve Python artifact names and on-disk layout unless a migration shim is added.
-- [x] Preserve standalone viewer invocation behavior.
-- [ ] Preserve `kodo logs` HTTP-serving behavior end-to-end.
-
-Exit criteria:
-
-- [ ] `runs`, `logs`, `resume`, issue-reporting, trace-upload, and viewer workflows operate against TS-generated run data and remain compatible with Python-generated artifacts where required.
-
-## Phase 6: Session Layer and Backend Adapters
-
-Deliverables:
-
-- [ ] TS session abstraction with ACP-first backend adapters.
-
-Concrete tasks:
-
-- [ ] Port session protocol and lifecycle behavior from `kodo/__init__.py` and `kodo/sessions/*`.
-- [ ] Define a transport boundary.
-- [ ] Implement ACP-backed adapters for Claude CLI / Claude Code, Codex, and Gemini CLI.
-- [ ] Keep explicit non-ACP adapters only where required, including Cursor and Kimi if still needed.
-- [ ] Normalize stdout/stderr draining, timeouts, JSON framing, and session IDs.
-- [ ] Normalize ACP event/message mapping into the shared session model.
-- [ ] Preserve Python-visible session behavior for resume, logs, accounting, and surfaced errors.
-- [ ] Produce a backend parity matrix.
-- [ ] Apply the subprocess session cleanup already identified in Python docs.
-
-Exit criteria:
-
-- [ ] Session tests validate startup, message exchange, timeout handling, resume/session-id behavior, and fallback transport behavior.
-- [ ] Adapter choice is not observable from the CLI except in explicitly documented diagnostics.
-
-## Phase 7: Orchestrators and Verification Loop
-
-Deliverables:
-
-- [ ] Main multi-agent orchestration loop works in TS.
-
-Concrete tasks:
-
-- [ ] Port `kodo/orchestrators/*`.
-- [ ] Preserve role behavior for architect, worker, tester, tester_browser, advisor, and parallel flows.
-- [ ] Port run status transitions, cycle planning, stage planning, verification, done-signal handling, and git ops.
-- [ ] Replace Python-specific branching with TS interfaces where appropriate.
-
-Exit criteria:
-
-- [ ] A real run can move through planning, execution, verification, rejection, retry, and completion in Node.
-
-## Phase 8: Specialized Modes
-
-Deliverables:
-
-- [ ] `test`, `improve`, and `fix-from` support work end-to-end.
-
-Concrete tasks:
-
-- [ ] Port discovery and report logic from `cli/_test.py`.
-- [ ] Port discovery and report logic from `cli/_improve.py`.
-- [ ] Port prompt templates for both modes.
-- [ ] Recreate fallback plan generation and report parsing helpers.
-- [ ] Ensure generated reports preserve expected sections and machine-readable behavior where applicable.
-- [ ] Preserve `--fix-from` compatibility with Python-generated report artifacts.
-
-Exit criteria:
-
-- [ ] TS CLI can produce and resume these modes without depending on the Python implementation.
-
-## Phase 9: Knowledge Mode
-
-Deliverables:
-
-- [ ] TS implementation of the `knowledge/` subsystem.
-
-Concrete tasks:
-
-- [ ] Port models, prompts, tools, convergence logic, team designer, and session integration.
-- [ ] Decide whether any Python-only dependency needs redesign in Node.
-
-Exit criteria:
-
-- [ ] Knowledge workflows have equivalent CLI/runtime support or are explicitly deferred behind a documented flag.
-
-## Phase 10: Benchmark and Dev Script Port
-
-Deliverables:
-
-- [ ] Benchmark harness and selected scripts are either ported or intentionally retired.
-
-Concrete tasks:
-
-- [ ] Separate user-facing product migration from internal benchmarking concerns.
-- [ ] Port benchmark code only after the main CLI is stable.
-- [ ] Replace one-off scripts with npm scripts where possible.
-
-Exit criteria:
-
-- [ ] Anything still left in Python is documented as intentionally non-blocking.
-
-## Testing Plan
-
-Test layers:
-
-- [ ] Unit tests for parsers, models, formatting, config resolution, and helpers.
-- [ ] Subsystem tests for sessions, orchestrators, resume, and logging.
-- [ ] Integration tests that execute the built CLI in subprocesses.
-- [ ] Golden tests for JSON output and report formatting.
-
-Migration approach:
-
-- [x] Start by mirroring the Python test suite categories and helpers, not by writing isolated ad hoc TS tests.
-- [x] Start by translating the highest-value Python tests into Vitest.
-- [ ] Preserve adversarial tests around malformed output, subprocess behavior, resume edge cases, and CLI JSON mode.
-- [ ] For long-tail Python tests, finish triage into must-port, merge/rewrite in TS, or retire because they only defend Python-specific behavior.
-
-Required suite shape before implementation accelerates:
-
-- [x] `test/cli`
-- [x] `test/config`
-- [x] `test/logging`
-- [x] `test/sessions`
-- [x] `test/orchestrators`
-- [x] `test/knowledge`
-- [x] `test/integration`
-- [x] `test/regression`
-- [x] `test/fixtures`
-- [x] `test/helpers`
-
-Minimum parity suite before cutover:
-
-- [x] CLI parsing and help/version coverage started.
-- [x] CLI JSON validation coverage started.
-- [ ] CLI prompt/confirmation/output coverage completed.
-- [x] Run directory creation and listing covered.
-- [x] Resume selection logic covered.
-- [ ] Viewer entrypoints and log-serving coverage completed.
-- [x] `issue`, `backends`, `teams`, and `teams add/edit/auto` coverage completed.
-- [ ] `update` coverage completed.
-- [x] `--debug` and `--orchestrator-model` parsing/validation coverage started.
-- [ ] One working ACP backend path covered.
+- Compared repo: `/Users/eddie/dev/arcqdev/kodo`
+- This repo: `/Users/eddie/dev/arcqdev/simple-runner`
+- Comparison date: March 23, 2026
+- Explicitly excluded from this list: Kimi execution support
+
+## Goal
+
+Track the user-visible functionality that still exists in `../kodo` but is missing or materially reduced in this TypeScript implementation.
+
+## Missing Features
+
+### 1. Intake And Goal Refinement
+
+- Full intake flow is not ported.
+  - Missing interactive intake chat.
+  - Missing non-interactive intake planning equivalent to Python.
+  - Missing intake-session reuse behavior.
+  - Missing existing-plan reuse behavior from the Python intake path.
+- `--auto-refine` is not at Python parity.
+  - The flag exists in the TypeScript CLI.
+  - The richer Python auto-refine workflow is not present.
+- `--skip-intake` exists, but there is no full intake system behind it to skip.
+
+### 2. Runtime Team And Config Resolution
+
+- Team config loading is less capable than Python.
+  - Missing runtime construction of fully validated executable teams from JSON.
+  - Missing Python-equivalent prompt enrichment and role-default injection during team build.
+  - Missing verifier-reference validation at Python parity.
+- Launch-time team recovery is missing.
+  - Python can recover from unavailable backends by offering `kodo teams auto` and retrying.
+  - TypeScript has `teams auto`, but not the same launch-time recovery behavior.
+- Interactive orchestrator/model selection is reduced.
+  - Missing provider/model discovery parity.
+  - Missing Ollama model discovery in the config flow.
+  - Missing early per-model API-key validation parity.
+- JSON/non-interactive launch behavior is thinner.
+  - Missing Python-equivalent separation of machine output from human progress output throughout launch.
+- Environment handling is reduced.
+  - Missing Python’s concurrency-safe environment mutation behavior used around backend selection and session setup.
+
+### 3. Orchestrator Implementations
+
+- Separate orchestrator implementations are not ported.
+  - Missing API orchestrator parity.
+  - Missing Claude Code orchestrator parity.
+  - Missing Codex CLI orchestrator parity.
+  - Missing Cursor CLI orchestrator parity.
+  - Missing Gemini CLI orchestrator parity.
+- The TypeScript runtime currently relies on a single generic orchestration loop instead of the Python set of backend-specific orchestrators.
+
+### 4. Stage Planning And Execution
+
+- Adaptive stage planning is missing.
+  - Missing advisor-driven reassessment between stages.
+  - Missing dynamic next-stage generation based on completed work.
+- Parallel stage execution is missing.
+  - Missing parallel stage groups.
+  - Missing isolated parallel execution loops per stage group.
+- Static staged execution exists, but it is materially simpler than Python’s staged execution model.
+
+### 5. Verification And Done Semantics
+
+- Verification is reduced.
+  - Missing Python’s richer verification modes such as full, skip, and quick-check behavior.
+  - Missing reset-on-first-attempt verification semantics.
+  - Missing fresh-worker fallback verification behavior.
+  - Missing richer verifier dictionaries and stage-specific verification control.
+- Done-signal handling is reduced.
+  - TypeScript currently depends on parsing textual markers such as `GOAL_DONE`, `END_CYCLE`, and `RAISE_ISSUE`.
+  - Missing Python’s richer structured done-signal handling and normalization logic.
+
+### 6. Git Worktree Isolation
+
+- Worktree-based execution support is not ported.
+  - Missing isolated git worktree creation for parallel stage execution.
+  - Missing stale worktree cleanup.
+  - Missing worktree commit handling.
+  - Missing branch merge-back behavior for persisted work.
+- TypeScript only has simpler repo-level auto-commit behavior.
+
+### 7. Resume Behavior
+
+- Resume is present but simpler than Python.
+  - Missing richer resume state parity.
+  - Missing backend-specific resume injection semantics that Python applies per session type.
+  - Missing Python-equivalent pending-exchange resume behavior.
+
+### 8. Logging And Run Accounting
+
+- Rich live run accounting is not ported.
+  - Missing per-agent call counts.
+  - Missing per-agent token accounting parity.
+  - Missing per-agent elapsed-time accounting parity.
+  - Missing per-agent error-count accounting parity.
+  - Missing orchestrator cost-bucket accounting parity.
+- TypeScript logging is functional, but the Python run-stats layer is not present.
+
+### 9. Conversation Capture
+
+- Conversation artifact capture is missing.
+  - Archives can include `conversations/` if such files exist.
+  - The TypeScript runtime does not currently persist those per-agent conversation artifacts the way Python does.
+
+### 10. Trace Upload
+
+- Trace upload is not ported.
+  - Missing best-effort archive upload to remote storage.
+  - Missing metadata indexing behavior.
+  - Missing run-teardown upload behavior.
+- Viewer/UI mentions around trace upload are not equivalent to the actual Python functionality.
+
+### 11. Archive Scrubbing
+
+- Archive scrubbing is reduced.
+  - Current TypeScript behavior is limited to a narrow regex-based redaction pass.
+  - Missing Python-equivalent secret scanning.
+  - Missing Python-equivalent PII cleaning.
+  - Missing Python-equivalent archive scrubbing depth for shared run artifacts.
+
+### 12. Summarization
+
+- LLM-backed summarization is not ported.
+  - Missing asynchronous summarizer behavior.
+  - Missing Ollama-backed summarization fallback.
+  - Missing Gemini-backed summarization fallback.
+  - Missing accumulated cycle-summary generation parity.
+
+### 13. Viewer Richness
+
+- Viewer support exists, but the Python viewer remains richer.
+  - Missing parity with the reusable Python HTML viewer app.
+  - Missing richer stats presentation driven by Python run accounting.
+  - Missing Python-level browser-verified viewer behavior coverage.
+
+### 14. Benchmark Tooling
+
+- Benchmark tooling is not ported.
+  - Missing the benchmark harness.
+  - Missing evaluation/reporting tooling.
+  - Missing the online benchmark support package and related workflows.
+
+### 15. Operational Docs And Support Scripts
+
+- Supporting operational workflows are thinner than Python.
+  - Missing Python-equivalent docs/scripts for resume verification.
+  - Missing Python-equivalent docs/scripts for viewer verification.
+  - Missing Python’s surrounding support assets for these workflows.
+
+### 16. Test Coverage For Missing Areas
+
+- The TypeScript repo does not yet have parity-grade test coverage for the missing areas above.
+  - Missing summarizer tests.
+  - Missing trace-upload tests.
+  - Missing browser-level viewer verification coverage.
+  - Missing broader orchestration parity coverage for adaptive, parallel, and worktree flows.
+
+## Not Missing Or Good Enough For Normal Use
+
+These areas appear to exist in usable form already, even if the implementation differs from Python:
+
+- Top-level CLI shell and aliases
+- `test`, `improve`, and `fix-from` entrypoints
+- Run listing
+- Basic log viewing
+- Basic run resume
+- Team management commands
+- Basic backend detection
+- Basic orchestration loop
+- Basic staged plan loading
+- Basic verification loop
+- Basic auto-commit
+
+## Suggested Priority
+
+### Must-Have For Full Parity
+
+- Intake and goal refinement
+- Separate orchestrator implementations
+- Adaptive and parallel stage execution
+- Verification and done-signal parity
+- Git worktree isolation and merge-back
+- Richer resume semantics
+- Trace upload
+- Summarization
+
+### Strongly Desired
+
+- Rich run accounting
+- Conversation capture
+- Archive scrubbing parity
+- Viewer richness
+- Launch-time team recovery and config parity
+
+### Nice To Have Or Separate Track
+
+- Benchmark tooling
+- Operational docs and support scripts
+- Expanded parity tests for all of the above

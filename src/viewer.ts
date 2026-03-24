@@ -76,7 +76,9 @@ function loadEvents(logPath: string): Record<string, unknown>[] {
     .flatMap((line) => {
       try {
         const parsed = JSON.parse(line) as unknown;
-        return typeof parsed === "object" && parsed !== null ? [parsed as Record<string, unknown>] : [];
+        return typeof parsed === "object" && parsed !== null
+          ? [parsed as Record<string, unknown>]
+          : [];
       } catch {
         return [];
       }
@@ -925,7 +927,9 @@ async function waitForSignals(server: ViewerServer): Promise<number> {
 export async function runViewerCli(argv = process.argv.slice(2)): Promise<number> {
   const hintPortIndex = argv.indexOf("--port");
   const requestedPort =
-    hintPortIndex >= 0 && hintPortIndex + 1 < argv.length && /^-?\d+$/u.test(argv[hintPortIndex + 1] ?? "")
+    hintPortIndex >= 0 &&
+    hintPortIndex + 1 < argv.length &&
+    /^-?\d+$/u.test(argv[hintPortIndex + 1] ?? "")
       ? Number.parseInt(argv[hintPortIndex + 1] ?? "8080", 10)
       : 8080;
   try {

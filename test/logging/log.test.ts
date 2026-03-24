@@ -8,13 +8,20 @@ import { emit, getLogFile, init, initAppend, RunDir } from "../../src/logging/lo
 import { parseRun } from "../../src/logging/runs.js";
 
 function makeTempDir(): string {
-  const directory = path.join(os.tmpdir(), `kodo-log-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const directory = path.join(
+    os.tmpdir(),
+    `kodo-log-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(directory, { recursive: true });
   return directory;
 }
 
 function writeEvents(logFile: string, events: Array<Record<string, unknown>>): void {
-  writeFileSync(logFile, `${events.map((event) => JSON.stringify({ ts: "2025-01-01T00:00:00Z", t: 0, ...event })).join("\n")}\n`, "utf8");
+  writeFileSync(
+    logFile,
+    `${events.map((event) => JSON.stringify({ ts: "2025-01-01T00:00:00Z", t: 0, ...event })).join("\n")}\n`,
+    "utf8",
+  );
 }
 
 afterEach(() => {
@@ -56,14 +63,23 @@ describe("logging primitives", () => {
     const logFile = path.join(tempDir, "resume", "log.jsonl");
     mkdirSync(path.dirname(logFile), { recursive: true });
     writeEvents(logFile, [
-      { event: "run_start", goal: "g", orchestrator: "api", model: "m", project_dir: tempDir, max_exchanges: 10, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "g",
+        orchestrator: "api",
+        model: "m",
+        project_dir: tempDir,
+        max_exchanges: 10,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "partial" },
     ]);
 
     expect(initAppend(logFile)).toBe(logFile);
     const content = readFileSync(logFile, "utf8");
-    expect(content).toContain("\"event\":\"run_resumed\"");
+    expect(content).toContain('"event":"run_resumed"');
   });
 
   it("rejects missing or invalid logs for initAppend", () => {
@@ -82,7 +98,16 @@ describe("parseRun", () => {
     const tempDir = makeTempDir();
     const incomplete = path.join(tempDir, "incomplete.jsonl");
     writeEvents(incomplete, [
-      { event: "run_start", goal: "build it", orchestrator: "api", model: "opus", project_dir: "/proj", max_exchanges: 20, max_cycles: 5, team: ["worker"] },
+      {
+        event: "run_start",
+        goal: "build it",
+        orchestrator: "api",
+        model: "opus",
+        project_dir: "/proj",
+        max_exchanges: 20,
+        max_cycles: 5,
+        team: ["worker"],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "did stuff", finished: false },
     ]);
@@ -97,7 +122,16 @@ describe("parseRun", () => {
 
     const finished = path.join(tempDir, "finished.jsonl");
     writeEvents(finished, [
-      { event: "run_start", goal: "g", orchestrator: "api", model: "opus", project_dir: "/p", max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "g",
+        orchestrator: "api",
+        model: "opus",
+        project_dir: "/p",
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "all done", finished: true },
       { event: "run_end" },
@@ -115,10 +149,21 @@ describe("parseRun", () => {
     writeFileSync(
       corrupt,
       [
-        JSON.stringify({ ts: "t", t: 0, event: "run_start", goal: "g", orchestrator: "api", model: "m", project_dir: "/p", max_exchanges: 30, max_cycles: 5, team: [] }),
+        JSON.stringify({
+          ts: "t",
+          t: 0,
+          event: "run_start",
+          goal: "g",
+          orchestrator: "api",
+          model: "m",
+          project_dir: "/p",
+          max_exchanges: 30,
+          max_cycles: 5,
+          team: [],
+        }),
         JSON.stringify({ ts: "t", t: 0, event: "cli_args", team: "full" }),
         "this is not json",
-        "{\"truncated",
+        '{"truncated',
         JSON.stringify({ ts: "t", t: 0, event: "cycle_end", summary: "ok" }),
       ].join("\n") + "\n",
       "utf8",
@@ -155,7 +200,18 @@ describe("parseRun", () => {
     const tempDir = makeTempDir();
     const logFile = path.join(tempDir, "staged.jsonl");
     writeEvents(logFile, [
-      { event: "run_start", goal: "staged goal", orchestrator: "api", model: "m", project_dir: tempDir, max_exchanges: 30, max_cycles: 5, team: ["worker_fast", "worker_smart"], has_stages: true, num_stages: 3 },
+      {
+        event: "run_start",
+        goal: "staged goal",
+        orchestrator: "api",
+        model: "m",
+        project_dir: tempDir,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: ["worker_fast", "worker_smart"],
+        has_stages: true,
+        num_stages: 3,
+      },
       { event: "cli_args", team: "quick" },
       { event: "stage_start", stage_index: 1 },
       { event: "cycle_end", summary: "stage 1 done" },
@@ -188,7 +244,17 @@ describe("parseRun", () => {
     const logFile = path.join(tempDir, "active-stage.jsonl");
     writeEvents(logFile, [
       { event: "cli_args", team: "quick", goal_text: "ship it", project_dir: tempDir },
-      { event: "run_start", goal: "ship it", orchestrator: "api", model: "m", project_dir: tempDir, max_exchanges: 30, max_cycles: 5, team: [], has_stages: true },
+      {
+        event: "run_start",
+        goal: "ship it",
+        orchestrator: "api",
+        model: "m",
+        project_dir: tempDir,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+        has_stages: true,
+      },
       { event: "stage_start", stage_index: 2 },
       { event: "cycle_end", summary: "part 1" },
       { event: "cycle_end", summary: "part 2" },

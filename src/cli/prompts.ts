@@ -33,7 +33,11 @@ function readLine(): string | null {
 
 const defaultAdapter: PromptAdapter = {
   text(message, defaultValue) {
-    writeStdout(defaultValue !== undefined && defaultValue.length > 0 ? `${message} [${defaultValue}]: ` : `${message}: `);
+    writeStdout(
+      defaultValue !== undefined && defaultValue.length > 0
+        ? `${message} [${defaultValue}]: `
+        : `${message}: `,
+    );
     const line = readLine();
     if (line === null) {
       return null;

@@ -24,7 +24,10 @@ export function loadUserConfig(homeDir = os.homedir()): UserConfig {
 
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
-    const config = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as UserConfig) : {};
+    const config =
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as UserConfig)
+        : {};
     cache.set(homeDir, config);
     return config;
   } catch {

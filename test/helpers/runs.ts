@@ -12,7 +12,10 @@ type RunFixtureOptions = {
 };
 
 export function makeRunsHome(): string {
-  const homeDir = path.join(os.tmpdir(), `kodo-runs-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const homeDir = path.join(
+    os.tmpdir(),
+    `kodo-runs-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
 }

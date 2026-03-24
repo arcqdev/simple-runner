@@ -26,13 +26,19 @@ const API_KEY_ENV_VARS = [
 ] as const;
 
 function makeProjectDir(): string {
-  const project = path.join(os.tmpdir(), `kodo-ts-noninteractive-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const project = path.join(
+    os.tmpdir(),
+    `kodo-ts-noninteractive-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(project, { recursive: true });
   return project;
 }
 
 function makeHomeDir(): string {
-  const homeDir = path.join(os.tmpdir(), `kodo-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const homeDir = path.join(
+    os.tmpdir(),
+    `kodo-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
 }
@@ -99,7 +105,10 @@ describe("runCli noninteractive runtime resolution", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     mkdirSync(path.join(homeDir, ".kodo"), { recursive: true });
-    writeFileSync(path.join(homeDir, ".kodo", "config.json"), `${JSON.stringify({ auto_commit: false })}\n`);
+    writeFileSync(
+      path.join(homeDir, ".kodo", "config.json"),
+      `${JSON.stringify({ auto_commit: false })}\n`,
+    );
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
     const io = captureOutput();
@@ -264,7 +273,15 @@ describe("runCli noninteractive runtime resolution", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
     setPromptAdapter(
-      scriptedPrompts(["quick — No verifiers — orchestrator is the quality gate", "api", "gpt-5.4", "12", "3", "high", "Audit the API surface"]),
+      scriptedPrompts([
+        "quick — No verifiers — orchestrator is the quality gate",
+        "api",
+        "gpt-5.4",
+        "12",
+        "3",
+        "high",
+        "Audit the API surface",
+      ]),
     );
     const io = captureOutput();
 
@@ -310,7 +327,9 @@ describe("runCli noninteractive runtime resolution", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
     writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
-    setPromptAdapter(scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]));
+    setPromptAdapter(
+      scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]),
+    );
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);
@@ -327,7 +346,9 @@ describe("runCli noninteractive runtime resolution", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
     writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
-    setPromptAdapter(scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]));
+    setPromptAdapter(
+      scriptedPrompts(["full — built-in team", "api", "gpt-5.4", "30", "5", "standard", true]),
+    );
     const io = captureOutput();
 
     expect(runCli(["--project", project])).toBe(0);

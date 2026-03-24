@@ -43,7 +43,10 @@ const API_KEY_ENV_VARS = [
   "XAI_API_KEY",
 ] as const;
 
-function parseOrchestratorFlag(value: string | null): { backend: string | null; model: string | null } {
+function parseOrchestratorFlag(value: string | null): {
+  backend: string | null;
+  model: string | null;
+} {
   if (value === null) {
     return { backend: null, model: null };
   }
@@ -140,7 +143,9 @@ function promptInteger(message: string, defaultValue: number): number {
 function selectNumeric(message: string, presets: number[], defaultValue: number): number {
   const prompt = getPromptAdapter();
   const presetStrings = presets.map(String);
-  const defaultChoice = presetStrings.includes(String(defaultValue)) ? String(defaultValue) : presetStrings[0] ?? String(defaultValue);
+  const defaultChoice = presetStrings.includes(String(defaultValue))
+    ? String(defaultValue)
+    : (presetStrings[0] ?? String(defaultValue));
   const choice = prompt.select(message, [...presetStrings, "Custom..."], defaultChoice);
   if (choice === null) {
     throw new CliError("Cancelled.");
@@ -154,8 +159,12 @@ function selectNumeric(message: string, presets: number[], defaultValue: number)
 function selectTeam(defaultValue: string, projectDir: string): string {
   const prompt = getPromptAdapter();
   const teams = listAvailableTeams();
-  const choices = teams.map((team) => `${team.name} — ${team.config.description ?? (team.source === "user" ? "user team" : "built-in team")}`);
-  const defaultChoice = choices.find((choice) => choice.startsWith(`${defaultValue} —`)) ?? choices[0];
+  const choices = teams.map(
+    (team) =>
+      `${team.name} — ${team.config.description ?? (team.source === "user" ? "user team" : "built-in team")}`,
+  );
+  const defaultChoice =
+    choices.find((choice) => choice.startsWith(`${defaultValue} —`)) ?? choices[0];
   const selected = prompt.select("Team", choices, defaultChoice);
   if (selected === null) {
     throw new CliError("Cancelled.");
@@ -201,7 +210,9 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
     );
   }
 
-  const defaultOrchestrator = hasApi ? "api (recommended — delegates cleanly, pay-per-token)" : choices.find((choice) => choice.startsWith(preferredOrchestrator())) ?? choices[0];
+  const defaultOrchestrator = hasApi
+    ? "api (recommended — delegates cleanly, pay-per-token)"
+    : (choices.find((choice) => choice.startsWith(preferredOrchestrator())) ?? choices[0]);
   const selected = prompt.select("Orchestrator:", choices, defaultOrchestrator);
   if (selected === null) {
     throw new CliError("Cancelled.");
@@ -218,7 +229,11 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
   };
 
   const defaultModel = defaultCliModel(orchestrator);
-  const modelChoice = prompt.select("Orchestrator model:", modelChoices[orchestrator] ?? [defaultModel, "(custom)"], defaultModel);
+  const modelChoice = prompt.select(
+    "Orchestrator model:",
+    modelChoices[orchestrator] ?? [defaultModel, "(custom)"],
+    defaultModel,
+  );
   if (modelChoice === null) {
     throw new CliError("Cancelled.");
   }
@@ -237,12 +252,14 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
 }
 
 function isSavedRuntimeParams(value: SavedRuntimeParams | null): value is ResolvedRuntimeParams {
-  return value !== null
-    && typeof value.team === "string"
-    && typeof value.orchestrator === "string"
-    && typeof value.orchestratorModel === "string"
-    && typeof value.maxExchanges === "number"
-    && typeof value.maxCycles === "number";
+  return (
+    value !== null &&
+    typeof value.team === "string" &&
+    typeof value.orchestrator === "string" &&
+    typeof value.orchestratorModel === "string" &&
+    typeof value.maxExchanges === "number" &&
+    typeof value.maxCycles === "number"
+  );
 }
 
 function maybeReuseSavedParams(projectDir: string): ResolvedRuntimeParams | null {
@@ -281,7 +298,12 @@ function maybeReuseSavedParams(projectDir: string): ResolvedRuntimeParams | null
     orchestratorModel: loaded.orchestratorModel,
     team: loaded.team,
   };
-  if (loaded.effort === "low" || loaded.effort === "standard" || loaded.effort === "high" || loaded.effort === "max") {
+  if (
+    loaded.effort === "low" ||
+    loaded.effort === "standard" ||
+    loaded.effort === "high" ||
+    loaded.effort === "max"
+  ) {
     params.effort = loaded.effort;
   }
 
@@ -306,7 +328,11 @@ function selectInteractiveRuntimeParams(projectDir: string): ResolvedRuntimePara
   const team = selectTeam(defaultTeam, projectDir);
   const { orchestrator, orchestratorModel } = selectOrchestrator();
   writeStdout("\n  An exchange = one orchestrator turn: think, delegate to agent, read result.\n");
-  const maxExchanges = selectNumeric("Max exchanges per cycle:", [20, 30, 50], DEFAULT_MAX_EXCHANGES);
+  const maxExchanges = selectNumeric(
+    "Max exchanges per cycle:",
+    [20, 30, 50],
+    DEFAULT_MAX_EXCHANGES,
+  );
   writeStdout("\n  A cycle = one full orchestrator session. If it doesn't finish,\n");
   writeStdout("  a new cycle starts with a summary of prior progress.\n");
   const maxCycles = selectNumeric("Max cycles:", [1, 3, 5, 10], DEFAULT_MAX_CYCLES);
@@ -333,10 +359,11 @@ function selectInteractiveRuntimeParams(projectDir: string): ResolvedRuntimePara
 }
 
 export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
-  const { backend: explicitBackend, model: explicitModel } = parseOrchestratorFlag(flags.orchestrator);
+  const { backend: explicitBackend, model: explicitModel } = parseOrchestratorFlag(
+    flags.orchestrator,
+  );
   const team =
-    flags.team ??
-    (flags.test ? "test" : flags.improve || flags.fixFrom !== null ? "full" : "full");
+    flags.team ?? (flags.test ? "test" : flags.improve || flags.fixFrom !== null ? "full" : "full");
 
   let orchestrator: string;
   let orchestratorModel = explicitModel;
@@ -358,7 +385,9 @@ export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
     orchestratorModel ??= defaultCliModel(orchestrator);
 
     if (orchestrator === "api" && !hasAnyApiKey()) {
-      throw new CliError("API orchestrator selected but no provider API key was found in the environment.");
+      throw new CliError(
+        "API orchestrator selected but no provider API key was found in the environment.",
+      );
     }
   }
 
@@ -380,15 +409,19 @@ export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
 
 export function loadOrResolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
   const hasExplicitRuntimeFlags =
-    flags.team !== null
-    || flags.orchestrator !== null
-    || flags.exchanges !== null
-    || flags.cycles !== null
-    || flags.effort !== null
-    || flags.noAutoCommit
-    || flags.debug;
+    flags.team !== null ||
+    flags.orchestrator !== null ||
+    flags.exchanges !== null ||
+    flags.cycles !== null ||
+    flags.effort !== null ||
+    flags.noAutoCommit ||
+    flags.debug;
   const nonInteractiveGoal =
-    flags.goal !== null || flags.goalFile !== null || flags.improve || flags.test || flags.fixFrom !== null;
+    flags.goal !== null ||
+    flags.goalFile !== null ||
+    flags.improve ||
+    flags.test ||
+    flags.fixFrom !== null;
 
   if (hasExplicitRuntimeFlags || nonInteractiveGoal) {
     const params = resolveRuntimeParams(flags);
@@ -413,11 +446,16 @@ export function resolveGoal(flags: MainFlags): ResolvedGoal {
   }
 
   if (flags.improve) {
-    return { goalText: flags.focus ? `Improve the project with focus: ${flags.focus}` : null, source: "improve" };
+    return {
+      goalText: flags.focus ? `Improve the project with focus: ${flags.focus}` : null,
+      source: "improve",
+    };
   }
   if (flags.test) {
     return {
-      goalText: flags.focus ? `Test the project with focus: ${flags.focus}` : "Test the project through realistic workflows.",
+      goalText: flags.focus
+        ? `Test the project with focus: ${flags.focus}`
+        : "Test the project through realistic workflows.",
       source: "test",
     };
   }

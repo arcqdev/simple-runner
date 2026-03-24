@@ -33,7 +33,9 @@ function parseResumeValue(next: string | undefined): { value: string; consumed: 
 
 function setExclusiveGoalMode(current: GoalMode | null, next: GoalMode): GoalMode {
   if (current !== null) {
-    throw new CliError("argument conflict: --goal, --goal-file, --improve, --test, and --fix-from are mutually exclusive");
+    throw new CliError(
+      "argument conflict: --goal, --goal-file, --improve, --test, and --fix-from are mutually exclusive",
+    );
   }
   return next;
 }
@@ -89,7 +91,9 @@ export function isTopLevelSubcommand(value: string | undefined): boolean {
   return value !== undefined && KNOWN_TOP_LEVEL.has(value);
 }
 
-export function isHandledAsSubcommand(value: string | undefined): value is
+export function isHandledAsSubcommand(
+  value: string | undefined,
+): value is
   | "run"
   | "runs"
   | "log"
@@ -249,7 +253,9 @@ export function parseMainArgs(argv: string[]): ParsedMain {
     throw new CliError("--goal must not be empty or whitespace-only.");
   }
   if (flags.resume === "") {
-    throw new CliError("--resume must not be an empty string. Omit the value to resume the latest run.");
+    throw new CliError(
+      "--resume must not be an empty string. Omit the value to resume the latest run.",
+    );
   }
   if (flags.focus !== null && flags.focus.trim().length === 0) {
     throw new CliError("--focus must not be empty or whitespace-only.");
@@ -272,8 +278,17 @@ export function parseMainArgs(argv: string[]): ParsedMain {
   if (flags.target.length > 0 && !flags.test) {
     throw new CliError("--target can only be used with --test.");
   }
-  if ((flags.skipIntake || flags.autoRefine) && !flags.goal && !flags.goalFile && !flags.improve && !flags.test && !flags.fixFrom) {
-    throw new CliError("--skip-intake and --auto-refine require --goal, --goal-file, --improve, or --test.");
+  if (
+    (flags.skipIntake || flags.autoRefine) &&
+    !flags.goal &&
+    !flags.goalFile &&
+    !flags.improve &&
+    !flags.test &&
+    !flags.fixFrom
+  ) {
+    throw new CliError(
+      "--skip-intake and --auto-refine require --goal, --goal-file, --improve, or --test.",
+    );
   }
 
   validateTargets(flags.project, flags.target);
@@ -300,13 +315,27 @@ export function parseMainArgs(argv: string[]): ParsedMain {
     flags.skipIntake = true;
   }
 
-  const nonInteractive = flags.goal !== null || flags.goalFile !== null || flags.improve || flags.test || flags.fixFrom !== null;
+  const nonInteractive =
+    flags.goal !== null ||
+    flags.goalFile !== null ||
+    flags.improve ||
+    flags.test ||
+    flags.fixFrom !== null;
   if (nonInteractive && flags.resume !== null) {
-    throw new CliError("--resume cannot be used with --goal/--goal-file/--improve/--test/--fix-from");
+    throw new CliError(
+      "--resume cannot be used with --goal/--goal-file/--improve/--test/--fix-from",
+    );
   }
 
   return {
-    command: flags.resume !== null ? "resume" : flags.improve ? "improve" : flags.test ? "test" : "default",
+    command:
+      flags.resume !== null
+        ? "resume"
+        : flags.improve
+          ? "improve"
+          : flags.test
+            ? "test"
+            : "default",
     flags,
   };
 }

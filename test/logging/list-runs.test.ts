@@ -7,15 +7,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { findIncompleteRuns, listRuns } from "../../src/logging/runs.js";
 
 function makeHomeDir(): string {
-  const homeDir = path.join(os.tmpdir(), `kodo-log-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const homeDir = path.join(
+    os.tmpdir(),
+    `kodo-log-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
 }
 
-function writeEvents(homeDir: string, runId: string, fileName: "log.jsonl" | "run.jsonl", events: Array<Record<string, unknown>>): void {
+function writeEvents(
+  homeDir: string,
+  runId: string,
+  fileName: "log.jsonl" | "run.jsonl",
+  events: Array<Record<string, unknown>>,
+): void {
   const runDir = path.join(homeDir, ".kodo", "runs", runId);
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(runDir + `/${fileName}`, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+  writeFileSync(
+    runDir + `/${fileName}`,
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    "utf8",
+  );
 }
 
 afterEach(() => {
@@ -39,12 +51,30 @@ describe("listRuns", () => {
     mkdirSync(projectB, { recursive: true });
 
     writeEvents(homeDir, "20250101_100000", "log.jsonl", [
-      { event: "run_start", goal: "older", orchestrator: "api", model: "m", project_dir: projectA, max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "older",
+        orchestrator: "api",
+        model: "m",
+        project_dir: projectA,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "ok" },
     ]);
     writeEvents(homeDir, "20250102_100000", "log.jsonl", [
-      { event: "run_start", goal: "newer", orchestrator: "api", model: "m", project_dir: projectB, max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "newer",
+        orchestrator: "api",
+        model: "m",
+        project_dir: projectB,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "ok" },
     ]);
@@ -64,13 +94,31 @@ describe("listRuns", () => {
     mkdirSync(project, { recursive: true });
 
     writeEvents(homeDir, "good_run", "log.jsonl", [
-      { event: "run_start", goal: "works", orchestrator: "api", model: "m", project_dir: project, max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "works",
+        orchestrator: "api",
+        model: "m",
+        project_dir: project,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "ok" },
     ]);
 
     writeEvents(homeDir, "legacy_run", "run.jsonl", [
-      { event: "run_start", goal: "legacy", orchestrator: "api", model: "m", project_dir: project, max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "legacy",
+        orchestrator: "api",
+        model: "m",
+        project_dir: project,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "quick" },
       { event: "cycle_end", summary: "ok" },
     ]);
@@ -118,12 +166,30 @@ describe("listRuns", () => {
     mkdirSync(theirs, { recursive: true });
 
     writeEvents(homeDir, "their_run", "log.jsonl", [
-      { event: "run_start", goal: "their goal", orchestrator: "api", model: "m", project_dir: theirs, max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "their goal",
+        orchestrator: "api",
+        model: "m",
+        project_dir: theirs,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "ok" },
     ]);
     writeEvents(homeDir, "my_run", "log.jsonl", [
-      { event: "run_start", goal: "my goal", orchestrator: "api", model: "m", project_dir: mine, max_exchanges: 30, max_cycles: 5, team: [] },
+      {
+        event: "run_start",
+        goal: "my goal",
+        orchestrator: "api",
+        model: "m",
+        project_dir: mine,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
       { event: "cli_args", team: "full" },
       { event: "cycle_end", summary: "ok" },
     ]);
