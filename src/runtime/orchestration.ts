@@ -18,6 +18,7 @@ import {
   createSessionForOrchestrator,
   createSessionForTeamAgent,
   type Session,
+  type SessionQueryResult,
 } from "./sessions.js";
 import { readRunStatus, writeRunStatus } from "./run-status.js";
 
@@ -56,6 +57,24 @@ type RuntimeAgent = {
   session: Session;
 };
 
+type AgentCollection = {
+  allAgents: RuntimeAgent[];
+  reviewerAgents: RuntimeAgent[];
+  workerAgents: RuntimeAgent[];
+};
+
+type ParsedDirective = {
+  explicit: boolean;
+  summary: string;
+  terminal: "end_cycle" | "goal_done" | "raise_issue";
+};
+
+type WorkerCycleOutcome = {
+  directive: ParsedDirective;
+  response: SessionQueryResult;
+  summary: string;
+};
+
 export type OrchestrationArtifacts = {
   reportPath: string | null;
   reportTitle: string | null;
@@ -73,6 +92,13 @@ type GitResult = {
   message?: string;
   skippedReason?: string;
 };
+
+export type RuntimeOrchestrator =
+  | ApiRuntimeOrchestrator
+  | ClaudeCodeRuntimeOrchestrator
+  | CodexCliRuntimeOrchestrator
+  | CursorCliRuntimeOrchestrator
+  | GeminiCliRuntimeOrchestrator;
 
 const DONE_ACCEPT = /(ALL CHECKS PASS|MINOR ISSUES FIXED)/iu;
 const DONE_REJECT = /(NOT ALL CHECKS PASS|NOT MINOR ISSUES FIXED)/iu;
@@ -204,27 +230,33 @@ function composeStageGoal(plan: GoalPlan, stage: GoalStage, completedSummaries: 
   return parts.join("\n\n");
 }
 
-function parseDoneDirective(text: string): {
-  summary: string;
-  terminal: "end_cycle" | "goal_done" | "raise_issue";
-} {
+function parseDoneDirective(text: string): ParsedDirective {
   const trimmed = text.trim();
   const lines = trimmed.split(/\r?\n/gu).map((line) => line.trim());
   for (const line of lines) {
     if (line.startsWith("GOAL_DONE:")) {
-      return { summary: line.slice("GOAL_DONE:".length).trim() || trimmed, terminal: "goal_done" };
+      return {
+        explicit: true,
+        summary: line.slice("GOAL_DONE:".length).trim() || trimmed,
+        terminal: "goal_done",
+      };
     }
     if (line.startsWith("END_CYCLE:")) {
-      return { summary: line.slice("END_CYCLE:".length).trim() || trimmed, terminal: "end_cycle" };
+      return {
+        explicit: true,
+        summary: line.slice("END_CYCLE:".length).trim() || trimmed,
+        terminal: "end_cycle",
+      };
     }
     if (line.startsWith("RAISE_ISSUE:")) {
       return {
+        explicit: true,
         summary: line.slice("RAISE_ISSUE:".length).trim() || trimmed,
         terminal: "raise_issue",
       };
     }
   }
-  return { summary: trimmed, terminal: "end_cycle" };
+  return { explicit: false, summary: trimmed, terminal: "end_cycle" };
 }
 
 function buildWorkerPrompt(
@@ -325,11 +357,7 @@ function collectRuntimeAgents(
   params: ResolvedRuntimeParams,
   flags: MainFlags,
   state: RuntimeState,
-): {
-  allAgents: RuntimeAgent[];
-  reviewerAgents: RuntimeAgent[];
-  workerAgents: RuntimeAgent[];
-} {
+): AgentCollection {
   const listing = getTeamByName(params.team, undefined, flags.project);
   const config =
     existsSync(runDir.teamFile)
@@ -338,7 +366,10 @@ function collectRuntimeAgents(
   if (config === null) {
     throw new Error(`Team not found: ${params.team}`);
   }
-  const resolvedConfig = buildRuntimeTeamConfig(config, existsSync(runDir.teamFile) ? runDir.teamFile : listing?.path).config;
+  const resolvedConfig = buildRuntimeTeamConfig(
+    config,
+    existsSync(runDir.teamFile) ? runDir.teamFile : listing?.path,
+  ).config;
 
   const groups = verificationGroups(resolvedConfig);
   const configuredWorkers = workerNames(resolvedConfig, groups);
@@ -522,230 +553,414 @@ function cycleSummary(text: string): string {
   return text.replace(/\s+/gu, " ").trim().slice(0, 4000);
 }
 
-function runSingleGoal(
-  runDir: RunDir,
-  params: ResolvedRuntimeParams,
-  goalText: string,
-  flags: MainFlags,
-  state: RuntimeState,
-  acceptCriteria?: string,
-  stageLabel?: string,
-): OrchestrationResult {
-  const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(
-    runDir,
-    params,
-    flags,
-    state,
-  );
-  if (workerAgents.length === 0) {
-    closeAgents(allAgents);
-    throw new Error("No runnable workers available for the selected team.");
+abstract class RuntimeOrchestratorBase {
+  readonly kind: string;
+  readonly model: string;
+
+  protected constructor(kind: string, model: string) {
+    this.kind = kind;
+    this.model = model;
   }
 
-  let priorSummary = state.lastSummary;
-  try {
-    for (
-      let cycleIndex = state.completedCycles + 1;
-      cycleIndex <= params.maxCycles;
-      cycleIndex += 1
-    ) {
-      state.currentStageCycles += 1;
-      writeRunStatus(flags.project, goalText, {
-        cycleNum: state.currentStageCycles,
-        maxCycles: params.maxCycles,
-        stageLabel,
-      });
-      emitLogEvent("cycle_start", {
-        cycle_index: cycleIndex,
-        orchestrator: params.orchestrator,
-        project_dir: flags.project,
-      });
+  run(
+    runDir: RunDir,
+    params: ResolvedRuntimeParams,
+    goal: ResolvedGoal,
+    flags: MainFlags,
+  ): OrchestrationResult & { artifacts: OrchestrationArtifacts } {
+    const state = loadRuntimeState(runDir);
+    const artifacts = expectedArtifacts(runDir, goal);
+    const plan = loadGoalPlan(runDir);
 
-      const worker = workerAgents[(cycleIndex - 1) % workerAgents.length];
-      emitLogEvent("agent_run_start", {
-        agent: worker.name,
-        model: worker.session.model,
-        session: worker.session.backend,
-      });
-      emitLogEvent("orchestrator_tool_call", {
-        agent: worker.name,
-        cycle_index: cycleIndex,
-        tool: "implement_goal",
-      });
+    emitLogEvent("run_start", {
+      goal: goal.goalText,
+      has_stages: plan !== null,
+      max_cycles: params.maxCycles,
+      max_exchanges: params.maxExchanges,
+      model: this.model,
+      num_stages: plan?.stages.length ?? 0,
+      orchestrator: this.kind,
+      project_dir: flags.project,
+    });
 
-      const response = worker.session.query(
-        buildWorkerPrompt(goalText, flags.project, priorSummary, worker, cycleIndex),
-        {
-          maxTurns: worker.config.max_turns ?? params.maxExchanges,
-          projectDir: flags.project,
-        },
+    const result =
+      plan === null
+        ? (() => {
+            emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
+            emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
+            return this.runSingleGoal(runDir, params, goal.goalText ?? "", flags, state);
+          })()
+        : this.runPlan(runDir, params, goal, flags, state, plan);
+
+    emitLogEvent("run_end", {
+      finished: result.finished,
+      orchestrator: this.kind,
+      summary: result.summary,
+      total_cycles: result.cyclesCompleted,
+      total_exchanges: result.cyclesCompleted,
+    });
+
+    return {
+      ...result,
+      artifacts,
+    };
+  }
+
+  protected runPlan(
+    runDir: RunDir,
+    params: ResolvedRuntimeParams,
+    goal: ResolvedGoal,
+    flags: MainFlags,
+    state: RuntimeState,
+    plan: GoalPlan,
+  ): OrchestrationResult {
+    emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
+    emitLogEvent("planning_end", {
+      has_plan: true,
+      mode: goal.source,
+      num_stages: plan.stages.length,
+    });
+
+    let summary = state.lastSummary;
+    for (const stage of plan.stages) {
+      if (state.completedStages.includes(stage.index)) {
+        continue;
+      }
+      emitLogEvent("stage_start", {
+        stage_index: stage.index,
+        stage_name: stage.name,
+        max_cycles: params.maxCycles,
+      });
+      const stageGoal = composeStageGoal(plan, stage, state.stageSummaries);
+      const result = this.runSingleGoal(
+        runDir,
+        params,
+        stageGoal,
+        flags,
+        state,
+        stage.acceptance_criteria,
+        `${stage.index}/${plan.stages.length}: ${stage.name}`,
       );
-      emitLogEvent("orchestrator_tool_result", {
-        agent: worker.name,
-        cycle_index: cycleIndex,
-        ok: !response.isError,
-        tool: "implement_goal",
-      });
-      emitLogEvent("agent_run_end", {
-        agent: worker.name,
-        status: response.isError ? "failed" : "completed",
-      });
-
-      state.agentSessionIds[worker.name] =
-        worker.session.sessionId ?? state.agentSessionIds[worker.name] ?? "";
-      const directive = parseDoneDirective(response.text);
-      let finished = false;
-      let summary = cycleSummary(directive.summary || response.text);
-
-      if (response.isError) {
-        emitLogEvent("orchestrator_response", {
-          done_called: false,
-          is_error: true,
-          orchestrator: params.orchestrator,
-          result_text: response.text.slice(0, 2000),
-        });
-      } else if (directive.terminal === "goal_done") {
-        const verificationIssues = runVerification(
-          reviewerAgents,
-          goalText,
+      summary = result.summary;
+      if (!result.finished) {
+        emitLogEvent("stage_end", {
+          cycles_used: state.currentStageCycles,
+          finished: false,
+          stage_index: stage.index,
+          stage_name: stage.name,
           summary,
+        });
+        return result;
+      }
+
+      state.completedStages.push(stage.index);
+      state.currentStageCycles = 0;
+      state.stageSummaries.push(summary);
+      persistRuntimeState(runDir, state);
+      emitLogEvent("stage_end", {
+        cycles_used: state.completedCycles,
+        finished: true,
+        stage_index: stage.index,
+        stage_name: stage.name,
+        summary,
+      });
+    }
+
+    state.finished = true;
+    persistRuntimeState(runDir, state);
+    return {
+      cyclesCompleted: state.completedCycles,
+      finished: true,
+      message: "Run completed.",
+      summary,
+    };
+  }
+
+  protected runSingleGoal(
+    runDir: RunDir,
+    params: ResolvedRuntimeParams,
+    goalText: string,
+    flags: MainFlags,
+    state: RuntimeState,
+    acceptCriteria?: string,
+    stageLabel?: string,
+  ): OrchestrationResult {
+    const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(
+      runDir,
+      params,
+      flags,
+      state,
+    );
+    if (workerAgents.length === 0) {
+      closeAgents(allAgents);
+      throw new Error("No runnable workers available for the selected team.");
+    }
+
+    let priorSummary = state.lastSummary;
+    try {
+      for (
+        let cycleIndex = state.completedCycles + 1;
+        cycleIndex <= params.maxCycles;
+        cycleIndex += 1
+      ) {
+        state.currentStageCycles += 1;
+        writeRunStatus(flags.project, goalText, {
+          cycleNum: state.currentStageCycles,
+          maxCycles: params.maxCycles,
+          stageLabel,
+        });
+        emitLogEvent("cycle_start", {
+          cycle_index: cycleIndex,
+          orchestrator: this.kind,
+          project_dir: flags.project,
+        });
+
+        const worker = workerAgents[(cycleIndex - 1) % workerAgents.length];
+        const outcome = this.runWorkerCycle(
+          goalText,
           flags.project,
+          worker,
+          priorSummary,
           cycleIndex,
-          acceptCriteria,
+          params.maxExchanges,
+          state,
         );
-        if (verificationIssues === null) {
-          emitLogEvent("orchestrator_done_accepted", {
+
+        let finished = false;
+        let summary = outcome.summary;
+
+        if (outcome.response.isError) {
+          emitLogEvent("orchestrator_response", {
+            done_called: outcome.directive.explicit,
+            is_error: true,
+            orchestrator: this.kind,
+            result_text: outcome.response.text.slice(0, 2000),
+          });
+        } else if (outcome.directive.terminal === "goal_done") {
+          const verificationIssues = runVerification(
+            reviewerAgents,
+            goalText,
+            summary,
+            flags.project,
+            cycleIndex,
+            acceptCriteria,
+          );
+          if (verificationIssues === null) {
+            emitLogEvent("orchestrator_done_accepted", {
+              cycle_index: cycleIndex,
+              summary,
+            });
+            finished = true;
+          } else {
+            summary = verificationIssues;
+            emitLogEvent("orchestrator_done_rejected", {
+              cycle_index: cycleIndex,
+              summary,
+            });
+            emitLogEvent("orchestrator_retry", {
+              cycle_index: cycleIndex,
+              reason: "Verification rejected completion",
+            });
+          }
+        } else if (outcome.directive.terminal === "raise_issue") {
+          emitLogEvent("orchestrator_raise_issue", {
             cycle_index: cycleIndex,
             summary,
           });
           finished = true;
         } else {
-          summary = verificationIssues;
-          emitLogEvent("orchestrator_done_rejected", {
+          emitLogEvent("orchestrator_end_cycle", {
             cycle_index: cycleIndex,
             summary,
           });
-          emitLogEvent("orchestrator_retry", {
-            cycle_index: cycleIndex,
-            reason: "Verification rejected completion",
-          });
         }
-      } else if (directive.terminal === "raise_issue") {
-        emitLogEvent("orchestrator_raise_issue", {
+
+        emitLogEvent("cycle_end", {
           cycle_index: cycleIndex,
+          exchanges: 1,
+          finished,
           summary,
         });
-        finished = true;
-      } else {
-        emitLogEvent("orchestrator_end_cycle", {
-          cycle_index: cycleIndex,
-          summary,
-        });
+
+        state.completedCycles = cycleIndex;
+        state.lastSummary = summary;
+        priorSummary = summary;
+        persistRuntimeState(runDir, state);
+
+        if (finished) {
+          maybeAutoCommit(flags.project, params.autoCommit, summary);
+          state.finished = true;
+          return {
+            cyclesCompleted: state.completedCycles,
+            finished: true,
+            message: outcome.directive.terminal === "raise_issue" ? "Run failed." : "Run completed.",
+            summary,
+          };
+        }
       }
 
-      emitLogEvent("cycle_end", {
-        cycle_index: cycleIndex,
-        exchanges: 1,
-        finished,
-        summary,
-      });
-
-      state.completedCycles = cycleIndex;
-      state.lastSummary = summary;
-      priorSummary = summary;
-      persistRuntimeState(runDir, state);
-
-      if (finished) {
-        maybeAutoCommit(flags.project, params.autoCommit, summary);
-        state.finished = true;
-        return {
-          cyclesCompleted: state.completedCycles,
-          finished: true,
-          message: directive.terminal === "raise_issue" ? "Run failed." : "Run completed.",
-          summary,
-        };
-      }
+      return {
+        cyclesCompleted: state.completedCycles,
+        finished: false,
+        message: "Run paused after reaching the cycle limit.",
+        summary: priorSummary,
+      };
+    } finally {
+      closeAgents(allAgents);
     }
+  }
 
+  protected runWorkerCycle(
+    goalText: string,
+    projectDir: string,
+    worker: RuntimeAgent,
+    priorSummary: string,
+    cycleIndex: number,
+    maxExchanges: number,
+    state: RuntimeState,
+  ): WorkerCycleOutcome {
+    const prompt = buildWorkerPrompt(goalText, projectDir, priorSummary, worker, cycleIndex);
+    emitLogEvent("agent_run_start", {
+      agent: worker.name,
+      model: worker.session.model,
+      session: worker.session.backend,
+    });
+    emitLogEvent("orchestrator_tool_call", {
+      agent: worker.name,
+      cycle_index: cycleIndex,
+      tool: "implement_goal",
+    });
+
+    const outcome = this.queryWorker(worker, prompt, projectDir, cycleIndex, maxExchanges);
+
+    emitLogEvent("orchestrator_tool_result", {
+      agent: worker.name,
+      cycle_index: cycleIndex,
+      ok: !outcome.response.isError,
+      tool: "implement_goal",
+    });
+    emitLogEvent("agent_run_end", {
+      agent: worker.name,
+      status: outcome.response.isError ? "failed" : "completed",
+    });
+
+    const sessionId = worker.session.sessionId;
+    if (sessionId !== null) {
+      state.agentSessionIds[worker.name] = sessionId;
+    }
+    return outcome;
+  }
+
+  protected queryWorker(
+    worker: RuntimeAgent,
+    prompt: string,
+    projectDir: string,
+    cycleIndex: number,
+    maxExchanges: number,
+  ): WorkerCycleOutcome {
+    const response = worker.session.query(prompt, {
+      maxTurns: worker.config.max_turns ?? maxExchanges,
+      projectDir,
+    });
+    return this.buildOutcome(response);
+  }
+
+  protected buildOutcome(response: SessionQueryResult): WorkerCycleOutcome {
+    const directive = parseDoneDirective(response.text);
     return {
-      cyclesCompleted: state.completedCycles,
-      finished: false,
-      message: "Run paused after reaching the cycle limit.",
-      summary: priorSummary,
+      directive,
+      response,
+      summary: cycleSummary(directive.summary || response.text),
     };
-  } finally {
-    closeAgents(allAgents);
   }
 }
 
-function runPlan(
-  runDir: RunDir,
-  params: ResolvedRuntimeParams,
-  goal: ResolvedGoal,
-  flags: MainFlags,
-  state: RuntimeState,
-  plan: GoalPlan,
-): OrchestrationResult {
-  emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
-  emitLogEvent("planning_end", {
-    has_plan: true,
-    mode: goal.source,
-    num_stages: plan.stages.length,
-  });
+abstract class CliRuntimeOrchestratorBase extends RuntimeOrchestratorBase {
+  protected constructor(kind: "codex" | "cursor" | "gemini-cli", model: string) {
+    super(kind, model);
+  }
+}
 
-  let summary = state.lastSummary;
-  for (const stage of plan.stages) {
-    if (state.completedStages.includes(stage.index)) {
-      continue;
-    }
-    emitLogEvent("stage_start", {
-      stage_index: stage.index,
-      stage_name: stage.name,
-      max_cycles: params.maxCycles,
-    });
-    const stageGoal = composeStageGoal(plan, stage, state.stageSummaries);
-    const result = runSingleGoal(
-      runDir,
-      params,
-      stageGoal,
-      flags,
-      state,
-      stage.acceptance_criteria,
-      `${stage.index}/${plan.stages.length}: ${stage.name}`,
-    );
-    summary = result.summary;
-    if (!result.finished) {
-      emitLogEvent("stage_end", {
-        cycles_used: state.currentStageCycles,
-        finished: false,
-        stage_index: stage.index,
-        stage_name: stage.name,
-        summary,
-      });
-      return result;
-    }
+export class ApiRuntimeOrchestrator extends RuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("api", model);
+  }
+}
 
-    state.completedStages.push(stage.index);
-    state.currentStageCycles = 0;
-    state.stageSummaries.push(summary);
-    persistRuntimeState(runDir, state);
-    emitLogEvent("stage_end", {
-      cycles_used: state.completedCycles,
-      finished: true,
-      stage_index: stage.index,
-      stage_name: stage.name,
-      summary,
-    });
+export class ClaudeCodeRuntimeOrchestrator extends RuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("claude-code", model);
   }
 
-  state.finished = true;
-  persistRuntimeState(runDir, state);
-  return {
-    cyclesCompleted: state.completedCycles,
-    finished: true,
-    message: "Run completed.",
-    summary,
-  };
+  protected override queryWorker(
+    worker: RuntimeAgent,
+    prompt: string,
+    projectDir: string,
+    cycleIndex: number,
+    maxExchanges: number,
+  ): WorkerCycleOutcome {
+    let response = worker.session.query(prompt, {
+      maxTurns: worker.config.max_turns ?? maxExchanges,
+      projectDir,
+    });
+    let outcome = this.buildOutcome(response);
+
+    for (let nudge = 1; nudge <= 3; nudge += 1) {
+      if (response.isError || outcome.directive.explicit) {
+        break;
+      }
+      emitLogEvent("orchestrator_nudge", {
+        cycle_index: cycleIndex,
+        orchestrator: this.kind,
+        attempt: nudge,
+      });
+      response = worker.session.query(
+        "You must signal completion to end this cycle. Reply with exactly one of GOAL_DONE:, END_CYCLE:, or RAISE_ISSUE: followed by a short summary.",
+        {
+          maxTurns: worker.config.max_turns ?? maxExchanges,
+          projectDir,
+        },
+      );
+      outcome = this.buildOutcome(response);
+    }
+
+    return outcome;
+  }
+}
+
+export class CodexCliRuntimeOrchestrator extends CliRuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("codex", model);
+  }
+}
+
+export class CursorCliRuntimeOrchestrator extends CliRuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("cursor", model);
+  }
+}
+
+export class GeminiCliRuntimeOrchestrator extends CliRuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("gemini-cli", model);
+  }
+}
+
+export function buildRuntimeOrchestrator(params: ResolvedRuntimeParams): RuntimeOrchestrator {
+  switch (params.orchestrator) {
+    case "api":
+      return new ApiRuntimeOrchestrator(params.orchestratorModel);
+    case "claude-code":
+      return new ClaudeCodeRuntimeOrchestrator(params.orchestratorModel);
+    case "codex":
+      return new CodexCliRuntimeOrchestrator(params.orchestratorModel);
+    case "cursor":
+      return new CursorCliRuntimeOrchestrator(params.orchestratorModel);
+    case "gemini-cli":
+      return new GeminiCliRuntimeOrchestrator(params.orchestratorModel);
+    default:
+      throw new Error(`Unsupported orchestrator: ${params.orchestrator}`);
+  }
 }
 
 export function runOrchestration(
@@ -754,40 +969,5 @@ export function runOrchestration(
   goal: ResolvedGoal,
   flags: MainFlags,
 ): OrchestrationResult & { artifacts: OrchestrationArtifacts } {
-  const state = loadRuntimeState(runDir);
-  const artifacts = expectedArtifacts(runDir, goal);
-  const plan = loadGoalPlan(runDir);
-
-  emitLogEvent("run_start", {
-    goal: goal.goalText,
-    has_stages: plan !== null,
-    max_cycles: params.maxCycles,
-    max_exchanges: params.maxExchanges,
-    model: params.orchestratorModel,
-    num_stages: plan?.stages.length ?? 0,
-    orchestrator: params.orchestrator,
-    project_dir: flags.project,
-  });
-
-  const result =
-    plan === null
-      ? (() => {
-          emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
-          emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
-          return runSingleGoal(runDir, params, goal.goalText ?? "", flags, state);
-        })()
-      : runPlan(runDir, params, goal, flags, state, plan);
-
-  emitLogEvent("run_end", {
-    finished: result.finished,
-    orchestrator: params.orchestrator,
-    summary: result.summary,
-    total_cycles: result.cyclesCompleted,
-    total_exchanges: result.cyclesCompleted,
-  });
-
-  return {
-    ...result,
-    artifacts,
-  };
+  return buildRuntimeOrchestrator(params).run(runDir, params, goal, flags);
 }

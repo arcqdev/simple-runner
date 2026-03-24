@@ -6,11 +6,20 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { RunDir, init } from "../../src/logging/log.js";
-import { runOrchestration } from "../../src/runtime/orchestration.js";
+import {
+  ApiRuntimeOrchestrator,
+  buildRuntimeOrchestrator,
+  ClaudeCodeRuntimeOrchestrator,
+  CodexCliRuntimeOrchestrator,
+  CursorCliRuntimeOrchestrator,
+  GeminiCliRuntimeOrchestrator,
+  runOrchestration,
+} from "../../src/runtime/orchestration.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../../src/cli/runtime.js";
 
 const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_STATE_DIR = process.env.FAKE_AGENT_STATE_DIR;
+const ORIGINAL_CLAUDE_NUDGE = process.env.FAKE_CLAUDE_NUDGE;
 
 function makeTempDir(prefix: string): string {
   const directory = path.join(
@@ -97,12 +106,97 @@ console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: worker 
 
 function installFakeClaude(binDir: string): void {
   const script = `#!${process.execPath}
-console.log(JSON.stringify({ type: "assistant", message: "ALL CHECKS PASS" }));
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("Claude Code CLI 1.0.0");
+  process.exit(0);
+}
+
+const prompt = args.at(-1) || "";
+const projectDir = process.cwd();
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || projectDir;
+const countFile = path.join(stateDir, "claude-count.txt");
+let count = 0;
+try {
+  count = Number(fs.readFileSync(countFile, "utf8")) || 0;
+} catch {}
+
+if (prompt.includes("Verify the repository state honestly.")) {
+  console.log(JSON.stringify({ type: "assistant", message: "ALL CHECKS PASS" }));
+  process.exit(0);
+}
+
+count += 1;
+fs.mkdirSync(path.dirname(countFile), { recursive: true });
+fs.writeFileSync(countFile, String(count), "utf8");
+
+if (process.env.FAKE_CLAUDE_NUDGE === "1" && count === 1) {
+  console.log(JSON.stringify({ type: "assistant", message: "Still working." }));
+  process.exit(0);
+}
+
+fs.writeFileSync(path.join(projectDir, "claude-output.txt"), "done\\n", "utf8");
+console.log(JSON.stringify({ type: "assistant", message: "GOAL_DONE: claude worker finished" }));
 `;
   writeExecutable(path.join(binDir, "claude"), script);
 }
 
-function projectFlags(projectDir: string): {
+function installFakeCursor(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("cursor-agent 1.0.0");
+  process.exit(0);
+}
+
+const workspaceIndex = args.indexOf("--workspace");
+const projectDir = workspaceIndex === -1 ? process.cwd() : args[workspaceIndex + 1];
+const prompt = args.at(-1) || "";
+
+if (prompt.includes("Verify the repository state honestly.")) {
+  console.log(JSON.stringify({ type: "result", result: "ALL CHECKS PASS", chatId: "cursor-chat" }));
+  process.exit(0);
+}
+
+fs.writeFileSync(path.join(projectDir, "cursor-output.txt"), "done\\n", "utf8");
+console.log(JSON.stringify({ type: "tool_use", tool: "edit_file" }));
+console.log(JSON.stringify({ type: "result", result: "GOAL_DONE: cursor worker finished", chatId: "cursor-chat" }));
+`;
+  writeExecutable(path.join(binDir, "cursor-agent"), script);
+}
+
+function installFakeGemini(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("gemini 1.0.0");
+  process.exit(0);
+}
+
+const promptIndex = args.indexOf("-p");
+const prompt = promptIndex === -1 ? "" : (args[promptIndex + 1] || "");
+
+if (prompt.includes("Verify the repository state honestly.")) {
+  console.log(JSON.stringify({ response: "ALL CHECKS PASS", stats: { models: { primary: { tokens: { prompt: 10, candidates: 4 } } } } }));
+  process.exit(0);
+}
+
+fs.writeFileSync(path.join(process.cwd(), "gemini-output.txt"), "done\\n", "utf8");
+console.log(JSON.stringify({ response: "GOAL_DONE: gemini worker finished", stats: { models: { primary: { tokens: { prompt: 10, candidates: 4 } } } } }));
+`;
+  writeExecutable(path.join(binDir, "gemini"), script);
+}
+
+function projectFlags(projectDir: string, orchestrator = "codex:gpt-5.4"): {
   autoRefine: false;
   cycles: number;
   debug: false;
@@ -140,7 +234,7 @@ function projectFlags(projectDir: string): {
     improve: false,
     json: false,
     noAutoCommit: false,
-    orchestrator: "codex:gpt-5.4",
+    orchestrator,
     project: projectDir,
     resume: null,
     skipIntake: true,
@@ -162,6 +256,21 @@ function uniqueRunId(label: string): string {
   return `${label}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function buildParams(orchestrator: string, orchestratorModel: string): ResolvedRuntimeParams {
+  return {
+    autoCommit: false,
+    maxCycles: 4,
+    maxExchanges: 3,
+    orchestrator,
+    orchestratorModel,
+    team: "full",
+  };
+}
+
+function buildGoal(text: string): ResolvedGoal {
+  return { goalText: text, source: "goal" };
+}
+
 afterEach(() => {
   process.env.PATH = ORIGINAL_PATH;
   if (ORIGINAL_STATE_DIR === undefined) {
@@ -169,9 +278,32 @@ afterEach(() => {
   } else {
     process.env.FAKE_AGENT_STATE_DIR = ORIGINAL_STATE_DIR;
   }
+  if (ORIGINAL_CLAUDE_NUDGE === undefined) {
+    delete process.env.FAKE_CLAUDE_NUDGE;
+  } else {
+    process.env.FAKE_CLAUDE_NUDGE = ORIGINAL_CLAUDE_NUDGE;
+  }
 });
 
 describe("runtime orchestration", () => {
+  it("selects backend-specific orchestrator implementations", () => {
+    expect(buildRuntimeOrchestrator(buildParams("api", "gpt-5.4"))).toBeInstanceOf(
+      ApiRuntimeOrchestrator,
+    );
+    expect(buildRuntimeOrchestrator(buildParams("claude-code", "opus"))).toBeInstanceOf(
+      ClaudeCodeRuntimeOrchestrator,
+    );
+    expect(buildRuntimeOrchestrator(buildParams("codex", "gpt-5.4"))).toBeInstanceOf(
+      CodexCliRuntimeOrchestrator,
+    );
+    expect(buildRuntimeOrchestrator(buildParams("cursor", "composer-1.5"))).toBeInstanceOf(
+      CursorCliRuntimeOrchestrator,
+    );
+    expect(buildRuntimeOrchestrator(buildParams("gemini-cli", "gemini-3-flash"))).toBeInstanceOf(
+      GeminiCliRuntimeOrchestrator,
+    );
+  });
+
   it("retries after verification rejection and then completes", () => {
     const binDir = makeTempDir("kodo-bin");
     installFakeCodex(binDir);
@@ -194,17 +326,12 @@ describe("runtime orchestration", () => {
     const runDir = RunDir.create(projectDir, uniqueRunId("runtime_retry"));
     init(runDir);
 
-    const params: ResolvedRuntimeParams = {
-      autoCommit: false,
-      maxCycles: 4,
-      maxExchanges: 3,
-      orchestrator: "codex",
-      orchestratorModel: "gpt-5.4",
-      team: "full",
-    };
-    const goal: ResolvedGoal = { goalText: "Implement the feature", source: "goal" };
-
-    const result = runOrchestration(runDir, params, goal, projectFlags(projectDir));
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Implement the feature"),
+      projectFlags(projectDir),
+    );
 
     expect(result.finished).toBe(true);
     expect(result.cyclesCompleted).toBeGreaterThanOrEqual(2);
@@ -263,17 +390,12 @@ describe("runtime orchestration", () => {
       "utf8",
     );
 
-    const params: ResolvedRuntimeParams = {
-      autoCommit: true,
-      maxCycles: 4,
-      maxExchanges: 3,
-      orchestrator: "codex",
-      orchestratorModel: "gpt-5.4",
-      team: "full",
-    };
-    const goal: ResolvedGoal = { goalText: "Ship the staged work", source: "goal" };
-
-    const result = runOrchestration(runDir, params, goal, projectFlags(projectDir));
+    const result = runOrchestration(
+      runDir,
+      { ...buildParams("codex", "gpt-5.4"), autoCommit: true },
+      buildGoal("Ship the staged work"),
+      projectFlags(projectDir),
+    );
 
     expect(result.finished).toBe(true);
     expect(readFileSync(path.join(projectDir, "stage-1.txt"), "utf8")).toContain("done");
@@ -289,5 +411,124 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"stage_start"');
     expect(log).toContain('"event":"stage_end"');
     expect(log).toContain('"event":"auto_commit_done"');
+  });
+
+  it("runs the api orchestrator with team workers", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("api-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_api"));
+    init(runDir);
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("api", "gpt-5.4"),
+      buildGoal("Implement with API orchestration"),
+      projectFlags(projectDir, "api:gpt-5.4"),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "worker-output.txt"), "utf8")).toContain("attempt 1");
+    expect(readFileSync(runDir.logFile, "utf8")).toContain('"orchestrator":"api"');
+  });
+
+  it("nudges claude-code workers until they emit a done directive", () => {
+    const binDir = makeTempDir("claude-bin");
+    installFakeClaude(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+    process.env.FAKE_CLAUDE_NUDGE = "1";
+
+    const projectDir = makeTempDir("claude-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "claude-cli", model: "opus", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_claude"));
+    init(runDir);
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("claude-code", "opus"),
+      buildGoal("Implement with Claude Code"),
+      projectFlags(projectDir, "claude-code:opus"),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "claude-output.txt"), "utf8")).toContain("done");
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"event":"orchestrator_nudge"');
+    expect(log).toContain('"orchestrator":"claude-code"');
+  });
+
+  it("runs the cursor cli orchestrator path", () => {
+    const binDir = makeTempDir("cursor-bin");
+    installFakeCursor(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("cursor-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "cursor", model: "composer-1.5", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_cursor"));
+    init(runDir);
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("cursor", "composer-1.5"),
+      buildGoal("Implement with Cursor"),
+      projectFlags(projectDir, "cursor:composer-1.5"),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "cursor-output.txt"), "utf8")).toContain("done");
+    expect(readFileSync(runDir.logFile, "utf8")).toContain('"orchestrator":"cursor"');
+  });
+
+  it("runs the gemini cli orchestrator path", () => {
+    const binDir = makeTempDir("gemini-bin");
+    installFakeGemini(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("gemini-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "gemini-cli", model: "gemini-3-flash", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_gemini"));
+    init(runDir);
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("gemini-cli", "gemini-3-flash"),
+      buildGoal("Implement with Gemini"),
+      projectFlags(projectDir, "gemini-cli:gemini-3-flash"),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "gemini-output.txt"), "utf8")).toContain("done");
+    expect(readFileSync(runDir.logFile, "utf8")).toContain('"orchestrator":"gemini-cli"');
   });
 });
