@@ -1,6 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
@@ -17,6 +20,7 @@ import { availableBackends } from "./backends.js";
 import {
   createSessionForOrchestrator,
   createSessionForTeamAgent,
+  type SessionBackend,
   type Session,
   type SessionQueryResult,
 } from "./sessions.js";
@@ -44,6 +48,8 @@ type GoalStage = {
   description: string;
   index: number;
   name: string;
+  parallel_group?: number | null;
+  persist_changes?: boolean;
 };
 
 type GoalPlan = {
@@ -73,6 +79,52 @@ type WorkerCycleOutcome = {
   directive: ParsedDirective;
   response: SessionQueryResult;
   summary: string;
+};
+
+type AdvisorDecision =
+  | {
+      action: "done";
+      reasoning: string;
+      summary: string;
+    }
+  | {
+      action: "run_group";
+      group: GoalStage[];
+      reasoning: string;
+    };
+
+type FollowUpStageSpec = {
+  acceptanceCriteria?: string;
+  description: string;
+  key: string;
+  name: string;
+  requiresMissingPath?: string;
+};
+
+type ParallelStageRuntime = {
+  cyclesUsed: number;
+  finished: boolean;
+  goalText: string;
+  priorSummary: string;
+  sessionId: string | null;
+  stage: GoalStage;
+  summary: string;
+  worker: RuntimeAgent;
+};
+
+type ParallelQueryPayload = {
+  backend: SessionBackend;
+  maxTurns: number;
+  model: string;
+  projectDir: string;
+  prompt: string;
+  resumeSessionId: string | null;
+  systemPrompt?: string | null;
+  timeoutS?: number;
+};
+
+type ParallelQueryResult = SessionQueryResult & {
+  sessionId: string | null;
 };
 
 export type OrchestrationArtifacts = {
@@ -213,6 +265,190 @@ function loadGoalPlan(runDir: RunDir): GoalPlan | null {
   }
 }
 
+function executionGroups(stages: GoalStage[]): GoalStage[][] {
+  const groups: GoalStage[][] = [];
+  const active = new Map<number, GoalStage[]>();
+
+  for (const stage of stages) {
+    if (stage.parallel_group == null) {
+      groups.push([stage]);
+      continue;
+    }
+    const existing = active.get(stage.parallel_group);
+    if (existing !== undefined) {
+      existing.push(stage);
+      continue;
+    }
+    const bucket = [stage];
+    active.set(stage.parallel_group, bucket);
+    groups.push(bucket);
+  }
+
+  return groups;
+}
+
+function sanitizePathCandidate(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.includes("\0") || path.isAbsolute(trimmed)) {
+    return null;
+  }
+  const normalized = path.normalize(trimmed);
+  if (normalized.startsWith("..")) {
+    return null;
+  }
+  return normalized;
+}
+
+function parseFollowUpSpec(summary: string): FollowUpStageSpec | null {
+  const lines = summary.split(/\r?\n/gu);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const missingMarker = "FOLLOW_UP_STAGE_IF_MISSING:";
+    const followUpMarker = "FOLLOW_UP_STAGE:";
+    const missingIndex = trimmed.indexOf(missingMarker);
+    if (missingIndex !== -1) {
+      const raw = trimmed.slice(missingIndex + missingMarker.length).trim();
+      const parts = raw.split("||").map((part) => part.trim());
+      if (parts.length >= 4) {
+        const requiresMissingPath = sanitizePathCandidate(parts[0] ?? "");
+        const name = parts[1] ?? "";
+        const description = parts[2] ?? "";
+        const acceptanceCriteria = parts[3] ?? "";
+        if (requiresMissingPath !== null && name.length > 0 && description.length > 0) {
+          return {
+            acceptanceCriteria,
+            description,
+            key: `missing:${requiresMissingPath}:${name.toLowerCase()}`,
+            name,
+            requiresMissingPath,
+          };
+        }
+      }
+    }
+    const followUpIndex = trimmed.indexOf(followUpMarker);
+    if (followUpIndex !== -1) {
+      const raw = trimmed.slice(followUpIndex + followUpMarker.length).trim();
+      const parts = raw.split("||").map((part) => part.trim());
+      if (parts.length >= 2) {
+        return {
+          acceptanceCriteria: parts[2] ?? "",
+          description: parts[1] ?? "",
+          key: `follow-up:${(parts[0] ?? "").toLowerCase()}:${(parts[1] ?? "").toLowerCase()}`,
+          name: parts[0] ?? "",
+        };
+      }
+    }
+  }
+  return null;
+}
+
+class LocalAdaptiveStageAdvisor {
+  readonly #basePlan: GoalPlan;
+  readonly #followUpQueue: FollowUpStageSpec[] = [];
+  readonly #seenFollowUps = new Set<string>();
+  #nextDynamicIndex: number;
+
+  constructor(plan: GoalPlan) {
+    this.#basePlan = plan;
+    this.#nextDynamicIndex = plan.stages.length + 1;
+  }
+
+  assess(
+    goal: string,
+    completedSummaries: string[],
+    completedStages: number[],
+    projectDir: string,
+  ): AdvisorDecision {
+    emitLogEvent("advisor_assess_start", {
+      completed_stages: completedStages.length,
+      planned_stages: this.#basePlan.stages.length,
+    });
+
+    const pendingBaseGroups = executionGroups(
+      this.#basePlan.stages.filter((stage) => !completedStages.includes(stage.index)),
+    );
+    const latestSummary = completedSummaries.at(-1)?.trim() ?? "";
+    const advisorDone =
+      /^ADVISOR_DONE:/imu.test(latestSummary) ||
+      /\b(goal complete|fully complete|nothing remaining)\b/iu.test(latestSummary);
+
+    if (advisorDone) {
+      const summary =
+        latestSummary.replace(/^ADVISOR_DONE:\s*/imu, "").trim() ||
+        `Adaptive execution concluded goal complete: ${goal}`;
+      emitLogEvent("advisor_assess_end", {
+        action: "done",
+        reasoning: "Completed summaries indicate the goal is already complete.",
+      });
+      return {
+        action: "done",
+        reasoning: "Completed summaries indicate the goal is already complete.",
+        summary,
+      };
+    }
+
+    if (pendingBaseGroups.length > 0) {
+      emitLogEvent("advisor_assess_end", {
+        action: "run_group",
+        reasoning: "Continue with the next planned stage group.",
+        stages: pendingBaseGroups[0].map((stage) => stage.index),
+      });
+      return {
+        action: "run_group",
+        group: pendingBaseGroups[0] ?? [],
+        reasoning: "Continue with the next planned stage group.",
+      };
+    }
+
+    for (const summary of completedSummaries) {
+      const followUp = parseFollowUpSpec(summary);
+      if (followUp === null || this.#seenFollowUps.has(followUp.key)) {
+        continue;
+      }
+      if (followUp.requiresMissingPath !== undefined) {
+        const filePath = path.join(projectDir, followUp.requiresMissingPath);
+        if (existsSync(filePath)) {
+          this.#seenFollowUps.add(followUp.key);
+          continue;
+        }
+      }
+      this.#seenFollowUps.add(followUp.key);
+      this.#followUpQueue.push(followUp);
+    }
+
+    const nextFollowUp = this.#followUpQueue.shift();
+    if (nextFollowUp !== undefined) {
+      const stage: GoalStage = {
+        acceptance_criteria: nextFollowUp.acceptanceCriteria,
+        description: nextFollowUp.description,
+        index: this.#nextDynamicIndex,
+        name: nextFollowUp.name,
+      };
+      this.#nextDynamicIndex += 1;
+      emitLogEvent("advisor_assess_end", {
+        action: "run_group",
+        reasoning: "Create a follow-up stage discovered during execution.",
+        stage_name: stage.name,
+      });
+      return {
+        action: "run_group",
+        group: [stage],
+        reasoning: "Create a follow-up stage discovered during execution.",
+      };
+    }
+
+    emitLogEvent("advisor_assess_end", {
+      action: "done",
+      reasoning: "No remaining planned stages or discovered follow-up work.",
+    });
+    return {
+      action: "done",
+      reasoning: "No remaining planned stages or discovered follow-up work.",
+      summary: latestSummary || `Completed adaptive execution for: ${goal}`,
+    };
+  }
+}
+
 function composeStageGoal(plan: GoalPlan, stage: GoalStage, completedSummaries: string[]): string {
   const parts = [`# Project Context\n${plan.context}`];
   if (completedSummaries.length > 0) {
@@ -235,23 +471,26 @@ function parseDoneDirective(text: string): ParsedDirective {
   const lines = trimmed.split(/\r?\n/gu).map((line) => line.trim());
   for (const line of lines) {
     if (line.startsWith("GOAL_DONE:")) {
+      const summary = trimmed.replace(/^GOAL_DONE:\s*/u, "").trim();
       return {
         explicit: true,
-        summary: line.slice("GOAL_DONE:".length).trim() || trimmed,
+        summary: summary.length > 0 ? summary : trimmed,
         terminal: "goal_done",
       };
     }
     if (line.startsWith("END_CYCLE:")) {
+      const summary = trimmed.replace(/^END_CYCLE:\s*/u, "").trim();
       return {
         explicit: true,
-        summary: line.slice("END_CYCLE:".length).trim() || trimmed,
+        summary: summary.length > 0 ? summary : trimmed,
         terminal: "end_cycle",
       };
     }
     if (line.startsWith("RAISE_ISSUE:")) {
+      const summary = trimmed.replace(/^RAISE_ISSUE:\s*/u, "").trim();
       return {
         explicit: true,
-        summary: line.slice("RAISE_ISSUE:".length).trim() || trimmed,
+        summary: summary.length > 0 ? summary : trimmed,
         terminal: "raise_issue",
       };
     }
@@ -553,6 +792,63 @@ function cycleSummary(text: string): string {
   return text.replace(/\s+/gu, " ").trim().slice(0, 4000);
 }
 
+function shellEscape(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function parallelHelperPath(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "query-session-helper.mjs");
+}
+
+function writeTempJson(dir: string, fileName: string, data: unknown): string {
+  const filePath = path.join(dir, fileName);
+  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  return filePath;
+}
+
+function runParallelQueries(payloads: ParallelQueryPayload[]): ParallelQueryResult[] {
+  if (payloads.length === 0) {
+    return [];
+  }
+
+  const helperPath = parallelHelperPath();
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-parallel-"));
+
+  try {
+    const outputPaths = payloads.map((payload, index) => {
+      const payloadPath = writeTempJson(tempDir, `payload-${index}.json`, payload);
+      const outputPath = path.join(tempDir, `result-${index}.json`);
+      return { outputPath, payloadPath };
+    });
+
+    const command = outputPaths
+      .map(
+        ({ payloadPath, outputPath }) =>
+          `${shellEscape(process.execPath)} ${shellEscape(helperPath)} ${shellEscape(payloadPath)} ${shellEscape(outputPath)}`,
+      )
+      .map((entry) => `(${entry}) &`)
+      .join("\n")
+      .concat("\nwait\n");
+
+    const result = spawnSync(process.env.SHELL || "/bin/sh", ["-lc", command], {
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    if ((result.status ?? 1) !== 0) {
+      throw new Error((result.stderr || result.stdout || "parallel helper failed").trim());
+    }
+
+    return outputPaths.map(({ outputPath }) => {
+      const parsed = JSON.parse(readFileSync(outputPath, "utf8")) as ParallelQueryResult;
+      return parsed;
+    });
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
 abstract class RuntimeOrchestratorBase {
   readonly kind: string;
   readonly model: string;
@@ -622,58 +918,295 @@ abstract class RuntimeOrchestratorBase {
     });
 
     let summary = state.lastSummary;
-    for (const stage of plan.stages) {
-      if (state.completedStages.includes(stage.index)) {
-        continue;
-      }
-      emitLogEvent("stage_start", {
-        stage_index: stage.index,
-        stage_name: stage.name,
-        max_cycles: params.maxCycles,
-      });
-      const stageGoal = composeStageGoal(plan, stage, state.stageSummaries);
-      const result = this.runSingleGoal(
-        runDir,
-        params,
-        stageGoal,
-        flags,
-        state,
-        stage.acceptance_criteria,
-        `${stage.index}/${plan.stages.length}: ${stage.name}`,
+    const advisor = new LocalAdaptiveStageAdvisor(plan);
+
+    while (state.completedCycles < params.maxCycles) {
+      const decision = advisor.assess(
+        goal.goalText ?? "",
+        state.stageSummaries,
+        state.completedStages,
+        flags.project,
       );
-      summary = result.summary;
-      if (!result.finished) {
-        emitLogEvent("stage_end", {
-          cycles_used: state.currentStageCycles,
-          finished: false,
-          stage_index: stage.index,
-          stage_name: stage.name,
+
+      if (decision.action === "done") {
+        summary = cycleSummary(decision.summary || summary || (goal.goalText ?? ""));
+        emitLogEvent("advisor_done", {
+          completed_stages: state.completedStages.length,
           summary,
         });
-        return result;
+        state.finished = true;
+        state.lastSummary = summary;
+        persistRuntimeState(runDir, state);
+        return {
+          cyclesCompleted: state.completedCycles,
+          finished: true,
+          message: "Run completed.",
+          summary,
+        };
       }
 
-      state.completedStages.push(stage.index);
-      state.currentStageCycles = 0;
-      state.stageSummaries.push(summary);
-      persistRuntimeState(runDir, state);
+      const group = decision.group;
+      if (group.length === 0) {
+        break;
+      }
+
+      const result =
+        group.length === 1
+          ? this.runSequentialStage(runDir, params, flags, state, plan, group[0]!)
+          : this.runParallelStageGroup(runDir, params, flags, state, plan, group);
+
+      summary = result.summary;
+      if (!result.finished) {
+        return result;
+      }
+    }
+
+    return {
+      cyclesCompleted: state.completedCycles,
+      finished: false,
+      message: "Run paused after reaching the cycle limit.",
+      summary,
+    };
+  }
+
+  protected runSequentialStage(
+    runDir: RunDir,
+    params: ResolvedRuntimeParams,
+    flags: MainFlags,
+    state: RuntimeState,
+    plan: GoalPlan,
+    stage: GoalStage,
+  ): OrchestrationResult {
+    const effectivePlan =
+      plan.stages.some((candidate) => candidate.index === stage.index) ||
+      stage.index <= plan.stages.length
+        ? plan
+        : { ...plan, stages: [...plan.stages, stage] };
+    emitLogEvent("stage_start", {
+      stage_index: stage.index,
+      stage_name: stage.name,
+      max_cycles: params.maxCycles,
+    });
+    const stageGoal = composeStageGoal(effectivePlan, stage, state.stageSummaries);
+    const result = this.runSingleGoal(
+      runDir,
+      params,
+      stageGoal,
+      flags,
+      state,
+      stage.acceptance_criteria,
+      `${stage.index}/${effectivePlan.stages.length}: ${stage.name}`,
+    );
+    const summary = result.summary;
+    if (!result.finished) {
       emitLogEvent("stage_end", {
-        cycles_used: state.completedCycles,
-        finished: true,
+        cycles_used: state.currentStageCycles,
+        finished: false,
         stage_index: stage.index,
         stage_name: stage.name,
         summary,
       });
+      return result;
     }
 
-    state.finished = true;
+    state.completedStages.push(stage.index);
+    state.currentStageCycles = 0;
+    state.stageSummaries.push(summary);
+    state.lastSummary = summary;
     persistRuntimeState(runDir, state);
-    return {
-      cyclesCompleted: state.completedCycles,
+    emitLogEvent("stage_end", {
+      cycles_used: state.completedCycles,
       finished: true,
-      message: "Run completed.",
+      stage_index: stage.index,
+      stage_name: stage.name,
       summary,
-    };
+    });
+    return result;
+  }
+
+  protected runParallelStageGroup(
+    runDir: RunDir,
+    params: ResolvedRuntimeParams,
+    flags: MainFlags,
+    state: RuntimeState,
+    plan: GoalPlan,
+    group: GoalStage[],
+  ): OrchestrationResult {
+    const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(
+      runDir,
+      params,
+      flags,
+      state,
+    );
+    if (workerAgents.length === 0) {
+      closeAgents(allAgents);
+      throw new Error("No runnable workers available for the selected team.");
+    }
+
+    const sharedSummaries = [...state.stageSummaries];
+    const stageRuntimes: ParallelStageRuntime[] = group.map((stage, index) => ({
+      cyclesUsed: 0,
+      finished: false,
+      goalText: composeStageGoal(plan, stage, sharedSummaries),
+      priorSummary: "",
+      sessionId: null,
+      stage,
+      summary: "",
+      worker: workerAgents[index % workerAgents.length]!,
+    }));
+
+    emitLogEvent("parallel_group_start", {
+      per_stage_cycles: params.maxCycles - state.completedCycles,
+      stages: group.map((stage) => stage.index),
+    });
+    for (const stage of group) {
+      emitLogEvent("stage_start", {
+        stage_index: stage.index,
+        stage_name: stage.name,
+        max_cycles: params.maxCycles - state.completedCycles,
+      });
+    }
+
+    try {
+      const maxParallelCycles = Math.max(1, params.maxCycles - state.completedCycles);
+      let groupCyclesUsed = 0;
+
+      while (groupCyclesUsed < maxParallelCycles && stageRuntimes.some((stage) => !stage.finished)) {
+        const activeStages = stageRuntimes.filter((stage) => !stage.finished);
+        const parallelResults = runParallelQueries(
+          activeStages.map((stage) => ({
+            backend: stage.worker.session.backend,
+            maxTurns: stage.worker.config.max_turns ?? params.maxExchanges,
+            model: stage.worker.session.model,
+            projectDir: flags.project,
+            prompt: buildWorkerPrompt(
+              stage.goalText,
+              flags.project,
+              stage.priorSummary,
+              stage.worker,
+              stage.cyclesUsed + 1,
+            ),
+            resumeSessionId: stage.sessionId,
+            systemPrompt: stage.worker.config.system_prompt,
+            timeoutS: stage.worker.config.session_timeout_s ?? stage.worker.config.timeout_s,
+          })),
+        );
+
+        emitLogEvent("cycle_start", {
+          cycle_index: state.completedCycles + groupCyclesUsed + 1,
+          orchestrator: this.kind,
+          project_dir: flags.project,
+          stages: activeStages.map((stage) => stage.stage.index),
+        });
+
+        let combinedSummary = "";
+        for (const [index, stageRuntime] of activeStages.entries()) {
+          const queryResult = parallelResults[index]!;
+          const outcome = this.buildOutcome(queryResult);
+          const stageSummary = outcome.summary;
+
+          stageRuntime.cyclesUsed += 1;
+          stageRuntime.priorSummary = stageSummary;
+          stageRuntime.summary = stageSummary;
+          stageRuntime.sessionId = queryResult.sessionId;
+
+          emitLogEvent("agent_run_end", {
+            agent: stageRuntime.worker.name,
+            status: queryResult.isError ? "failed" : "completed",
+          });
+
+          if (outcome.directive.terminal === "goal_done" && !queryResult.isError) {
+            const verificationIssues = runVerification(
+              reviewerAgents,
+              stageRuntime.goalText,
+              stageSummary,
+              flags.project,
+              state.completedCycles + groupCyclesUsed + 1,
+              stageRuntime.stage.acceptance_criteria,
+            );
+            if (verificationIssues === null) {
+              stageRuntime.finished = true;
+              emitLogEvent("orchestrator_done_accepted", {
+                cycle_index: state.completedCycles + groupCyclesUsed + 1,
+                stage_index: stageRuntime.stage.index,
+                summary: stageSummary,
+              });
+            } else {
+              stageRuntime.summary = verificationIssues;
+              stageRuntime.priorSummary = verificationIssues;
+              emitLogEvent("orchestrator_done_rejected", {
+                cycle_index: state.completedCycles + groupCyclesUsed + 1,
+                stage_index: stageRuntime.stage.index,
+                summary: verificationIssues,
+              });
+            }
+          } else if (outcome.directive.terminal === "raise_issue" || queryResult.isError) {
+            stageRuntime.finished = true;
+            emitLogEvent("orchestrator_raise_issue", {
+              cycle_index: state.completedCycles + groupCyclesUsed + 1,
+              stage_index: stageRuntime.stage.index,
+              summary: stageSummary,
+            });
+          }
+
+          combinedSummary += `${combinedSummary.length > 0 ? " | " : ""}S${stageRuntime.stage.index}: ${stageRuntime.summary}`;
+        }
+
+        groupCyclesUsed += 1;
+        state.completedCycles += 1;
+        state.lastSummary = combinedSummary;
+        persistRuntimeState(runDir, state);
+        emitLogEvent("cycle_end", {
+          cycle_index: state.completedCycles,
+          exchanges: activeStages.length,
+          finished: stageRuntimes.every((stage) => stage.finished),
+          summary: combinedSummary,
+        });
+      }
+
+      const completedStages = stageRuntimes.filter((stage) => stage.finished);
+      for (const stageRuntime of stageRuntimes) {
+        const finished = stageRuntime.finished;
+        emitLogEvent("stage_end", {
+          cycles_used: stageRuntime.cyclesUsed,
+          finished,
+          stage_index: stageRuntime.stage.index,
+          stage_name: stageRuntime.stage.name,
+          summary: stageRuntime.summary,
+        });
+        if (finished) {
+          state.completedStages.push(stageRuntime.stage.index);
+          state.stageSummaries.push(stageRuntime.summary);
+        }
+      }
+
+      state.currentStageCycles = 0;
+      persistRuntimeState(runDir, state);
+      emitLogEvent("parallel_group_end", {
+        finished: completedStages.length > 0,
+        stages: group.map((stage) => stage.index),
+      });
+
+      if (completedStages.length === 0) {
+        return {
+          cyclesCompleted: state.completedCycles,
+          finished: false,
+          message: "Run paused after parallel stage group made no completed progress.",
+          summary: stageRuntimes.map((stage) => stage.summary).join(" | "),
+        };
+      }
+
+      const summary = completedStages.map((stage) => stage.summary).join(" | ");
+      state.lastSummary = summary;
+      return {
+        cyclesCompleted: state.completedCycles,
+        finished: true,
+        message: "Run completed.",
+        summary,
+      };
+    } finally {
+      closeAgents(allAgents);
+    }
   }
 
   protected runSingleGoal(

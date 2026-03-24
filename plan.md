@@ -53,13 +53,14 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 4. Stage Planning And Execution
 
-- Adaptive stage planning is missing.
-  - Missing advisor-driven reassessment between stages.
-  - Missing dynamic next-stage generation based on completed work.
-- Parallel stage execution is missing.
-  - Missing parallel stage groups.
-  - Missing isolated parallel execution loops per stage group.
-- Static staged execution exists, but it is materially simpler than Python’s staged execution model.
+- Adaptive stage planning is now present.
+  - Runtime stage execution re-assesses progress between completed stages.
+  - The runtime can inject follow-up stages discovered during execution and stop early when the goal is already complete.
+- Parallel stage execution is now present.
+  - Stages sharing a `parallel_group` run as a real concurrent stage group.
+  - Parallel stage groups execute in isolated per-stage loops and then continue into later sequential stages.
+- Remaining delta:
+  - TypeScript parallel execution still operates in the main repo rather than Python’s git-worktree isolation/merge path.
 
 ### 5. Verification And Done Semantics
 

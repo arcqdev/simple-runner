@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +39,7 @@ function installFakeCodex(binDir: string): void {
   const script = `#!${process.execPath}
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 function readCounter(file) {
   try {
@@ -71,6 +72,7 @@ const projectDir = cdIndex === -1 ? process.cwd() : args[cdIndex + 1];
 const stateDir = process.env.FAKE_AGENT_STATE_DIR || projectDir;
 const verifierFile = path.join(stateDir, "verifier-count.txt");
 const workerFile = path.join(stateDir, "worker-count.txt");
+const startFile = path.join(stateDir, "parallel-start.txt");
 
 console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-1" }));
 console.log(JSON.stringify({ type: "token_count", input_tokens: 5, output_tokens: 7 }));
@@ -86,15 +88,55 @@ if (prompt.includes("Verify the repository state honestly.")) {
 const count = readCounter(workerFile) + 1;
 writeCounter(workerFile, count);
 
-if (prompt.includes("Current Stage (1/2)")) {
+if (prompt.includes("Current Stage (1/2): Stage One")) {
   fs.writeFileSync(path.join(projectDir, "stage-1.txt"), "done\\n", "utf8");
   console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: stage 1 finished" }));
   process.exit(0);
 }
 
-if (prompt.includes("Current Stage (2/2)")) {
+if (prompt.includes("Current Stage (2/2): Stage Two")) {
   fs.writeFileSync(path.join(projectDir, "stage-2.txt"), "done\\n", "utf8");
   console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: stage 2 finished" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Current Stage (1/1): Discover Follow-up")) {
+  fs.writeFileSync(path.join(projectDir, "discover.txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: discovered follow-up\\nFOLLOW_UP_STAGE_IF_MISSING: finalize.txt || Finalize Follow-up || Create finalize.txt in the repo. || finalize.txt exists" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Current Stage (2/2): Finalize Follow-up")) {
+  fs.writeFileSync(path.join(projectDir, "finalize.txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: follow-up finished" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Current Stage (1/3): Early Finish")) {
+  fs.writeFileSync(path.join(projectDir, "early.txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: stage finished\\nADVISOR_DONE: goal complete after early finish" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Current Stage (2/3): Should Skip") || prompt.includes("Current Stage (3/3): Also Skip")) {
+  fs.writeFileSync(path.join(projectDir, "should-not-exist.txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: should not run" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Current Stage (2/4): Parallel A") || prompt.includes("Current Stage (3/4): Parallel B")) {
+  const label = prompt.includes("Parallel A") ? "parallel-a" : "parallel-b";
+  const startedAt = Date.now();
+  fs.appendFileSync(startFile, label + ":" + startedAt + "\\n", "utf8");
+  spawnSync(process.execPath, ["-e", "setTimeout(() => process.exit(0), 350)"]);
+  fs.writeFileSync(path.join(projectDir, label + ".txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: " + label + " finished" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Current Stage (4/4): Final Sequential")) {
+  fs.writeFileSync(path.join(projectDir, "final-sequential.txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: final sequential finished" }));
   process.exit(0);
 }
 
@@ -411,6 +453,160 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"stage_start"');
     expect(log).toContain('"event":"stage_end"');
     expect(log).toContain('"event":"auto_commit_done"');
+  });
+
+  it("adds adaptive follow-up stages discovered during execution", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("adaptive-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_adaptive_followup"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { index: 1, name: "Discover Follow-up", description: "Inspect the repo and determine any missing finalization work." },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Adaptively finish the work"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "discover.txt"), "utf8")).toContain("done");
+    expect(readFileSync(path.join(projectDir, "finalize.txt"), "utf8")).toContain("done");
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"event":"advisor_assess_start"');
+    expect(log).toContain('"event":"advisor_assess_end"');
+    expect(log).toContain("Finalize Follow-up");
+  });
+
+  it("lets adaptive planning finish early without consuming remaining static stages", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("adaptive-early-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_adaptive_early"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { index: 1, name: "Early Finish", description: "Complete the goal immediately if possible." },
+            { index: 2, name: "Should Skip", description: "This stage should be skipped if the advisor ends the run." },
+            { index: 3, name: "Also Skip", description: "This stage should also be skipped." },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Finish early"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "early.txt"), "utf8")).toContain("done");
+    expect(existsSync(path.join(projectDir, "should-not-exist.txt"))).toBe(false);
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"event":"advisor_done"');
+  });
+
+  it("runs parallel stage groups concurrently and continues with later sequential stages", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("parallel-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        worker_slow: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_parallel_group"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { index: 1, name: "Setup", description: "Create the initial setup artifact." },
+            { index: 2, name: "Parallel A", description: "Run branch A in parallel.", parallel_group: 1 },
+            { index: 3, name: "Parallel B", description: "Run branch B in parallel.", parallel_group: 1 },
+            { index: 4, name: "Final Sequential", description: "Finish with a sequential stage after the parallel group." },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Run mixed staged execution"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "parallel-a.txt"), "utf8")).toContain("done");
+    expect(readFileSync(path.join(projectDir, "parallel-b.txt"), "utf8")).toContain("done");
+    expect(readFileSync(path.join(projectDir, "final-sequential.txt"), "utf8")).toContain("done");
+
+    const starts = readFileSync(path.join(projectDir, "parallel-start.txt"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => Number(line.split(":")[1]));
+    expect(starts).toHaveLength(2);
+    expect(Math.abs(starts[0]! - starts[1]!)).toBeLessThan(250);
+
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"event":"parallel_group_start"');
+    expect(log).toContain('"event":"parallel_group_end"');
+    expect(log).toContain("Final Sequential");
   });
 
   it("runs the api orchestrator with team workers", () => {
