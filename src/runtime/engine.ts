@@ -274,7 +274,7 @@ export function executePendingRun(
       !shouldUseSessionRuntime() ||
       process.env.KODO_ENABLE_SESSION_RUNTIME === "0" ||
       sessionBackend === null ||
-      !availableBackends()[sessionBackend === "claude-cli" ? "claude" : sessionBackend]
+      !availableBackends()[sessionBackend]
     ) {
       const reason = !shouldUseSessionRuntime()
         ? "Session runtime disabled for this environment"

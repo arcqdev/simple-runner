@@ -1,11 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import process from "node:process";
 
 const ACP_PROTOCOL_VERSION = "0.1";
 const DEFAULT_TIMEOUT_S = 7200;
-const MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const EVENT_TIMEOUT_MS = 30_000;
 const STARTUP_TIMEOUT_MS = 5_000;
 const ACP_PROVIDER_ENV_VARS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
@@ -39,25 +38,15 @@ const AUTH_PATTERNS = new RegExp(
   "i",
 );
 const RATE_LIMIT_PATTERNS = new RegExp(
-  [
-    "quota exceeded",
-    "rate.?limit",
-    "usage.?limit",
-    "plan.?limit",
-    "429\\b",
-    "too many requests",
-  ].join("|"),
+  ["quota exceeded", "rate.?limit", "usage.?limit", "plan.?limit", "429\\b", "too many requests"].join(
+    "|",
+  ),
   "i",
 );
 const SERVICE_PATTERNS = new RegExp(
-  [
-    "503\\b",
-    "service unavailable",
-    "connection refused",
-    "temporar",
-    "overloaded",
-    "unavailable",
-  ].join("|"),
+  ["503\\b", "service unavailable", "connection refused", "temporar", "overloaded", "unavailable"].join(
+    "|",
+  ),
   "i",
 );
 
@@ -94,321 +83,10 @@ function stringifyUnknown(value) {
   }
 }
 
-function parseJsonLines(text) {
-  return text
-    .split(/\r?\n/gu)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .flatMap((line) => {
-      try {
-        const parsed = JSON.parse(line);
-        return toRecord(parsed) === null ? [] : [parsed];
-      } catch {
-        return [];
-      }
-    });
-}
-
-function parseTextBlocks(content) {
-  if (!Array.isArray(content)) {
-    return null;
-  }
-
-  const joined = content
-    .flatMap((item) => {
-      const record = toRecord(item);
-      const text = stringField(record, "text") ?? stringField(record, "content");
-      return text === null ? [] : [text];
-    })
-    .join("");
-
-  return joined.length > 0 ? joined : null;
-}
-
-function parseClaudeCliOutput(result) {
-  const messages = parseJsonLines(result.stdout);
-  let resultText = "";
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let sessionId = null;
-  const errorMessages = [];
-
-  for (const message of messages) {
-    sessionId ??= stringField(message, "session_id") ?? stringField(message, "sessionId");
-    const messageType = stringField(message, "type") ?? "";
-
-    if (messageType === "result") {
-      resultText =
-        stringField(message, "result") ??
-        stringField(message, "response") ??
-        stringField(message, "message") ??
-        resultText;
-      const usage = toRecord(message.usage);
-      inputTokens += numberField(usage, "input_tokens") || numberField(usage, "prompt_tokens");
-      outputTokens +=
-        numberField(usage, "output_tokens") || numberField(usage, "completion_tokens");
-      continue;
-    }
-
-    if (messageType === "assistant" || messageType === "assistant_message") {
-      const embedded = toRecord(message.message);
-      resultText =
-        stringField(message, "message") ??
-        stringField(embedded, "message") ??
-        parseTextBlocks(embedded?.content) ??
-        resultText;
-      const usage = toRecord(message.usage);
-      inputTokens += numberField(usage, "input_tokens") || numberField(usage, "prompt_tokens");
-      outputTokens +=
-        numberField(usage, "output_tokens") || numberField(usage, "completion_tokens");
-      continue;
-    }
-
-    if (messageType === "error") {
-      const errorText = stringField(message, "message") ?? stringField(message, "error");
-      if (errorText !== null) {
-        errorMessages.push(errorText);
-      }
-    }
-  }
-
-  if (resultText.length === 0 && errorMessages.length > 0) {
-    resultText = errorMessages.at(-1) ?? "";
-  }
-
-  return {
-    inputTokens,
-    isError: errorMessages.length > 0 && resultText.length === 0,
-    outputTokens,
-    rawMessages: messages,
-    resultText,
-    sessionId,
-  };
-}
-
-function parseCodexOutput(result) {
-  const messages = parseJsonLines(result.stdout);
-  let resultText = "";
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let sessionId = null;
-  const errorMessages = [];
-
-  for (const message of messages) {
-    const inner = toRecord(message.msg);
-    const messageType = stringField(message, "type") ?? stringField(inner, "type") ?? "";
-
-    if (messageType === "thread.started") {
-      sessionId =
-        stringField(message, "thread_id") ?? stringField(message, "session_id") ?? sessionId;
-      continue;
-    }
-    if (messageType === "agent_message") {
-      resultText = stringField(inner, "message") ?? stringField(message, "message") ?? resultText;
-      continue;
-    }
-    if (messageType === "token_count") {
-      inputTokens += numberField(inner, "input_tokens") || numberField(message, "input_tokens");
-      outputTokens += numberField(inner, "output_tokens") || numberField(message, "output_tokens");
-      continue;
-    }
-    if (messageType === "turn.completed") {
-      const usage = toRecord(message.usage);
-      inputTokens += numberField(usage, "input_tokens");
-      outputTokens += numberField(usage, "output_tokens");
-      continue;
-    }
-    if (messageType === "item.completed") {
-      const item = toRecord(message.item);
-      if (stringField(item, "type") === "agent_message") {
-        resultText = stringField(item, "text") ?? resultText;
-      } else if (stringField(item, "role") === "assistant") {
-        resultText = parseTextBlocks(item?.content) ?? resultText;
-      }
-      continue;
-    }
-    if (messageType === "error") {
-      const text =
-        stringField(inner, "message") ??
-        stringField(inner, "error") ??
-        stringField(message, "message") ??
-        stringField(message, "error");
-      if (text !== null) {
-        errorMessages.push(text);
-      }
-      continue;
-    }
-    if (messageType === "background_event") {
-      const text = stringField(inner, "message") ?? stringField(message, "message");
-      if (text !== null && /(error|status 4)/iu.test(text)) {
-        errorMessages.push(text);
-      }
-    }
-  }
-
-  if (resultText.length === 0 && errorMessages.length > 0) {
-    resultText = errorMessages.at(-1) ?? "";
-  }
-
-  return {
-    inputTokens,
-    isError: errorMessages.length > 0 && resultText.length > 0,
-    outputTokens,
-    rawMessages: messages,
-    resultText,
-    sessionId,
-  };
-}
-
-function parseCursorOutput(result) {
-  const messages = parseJsonLines(result.stdout);
-  let resultText = "";
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let sessionId = null;
-
-  for (const message of messages) {
-    if (stringField(message, "type") === "result") {
-      const raw = message.result;
-      resultText = raw == null ? resultText : typeof raw === "string" ? raw : JSON.stringify(raw);
-    }
-
-    const usage = toRecord(message.usage) ?? message;
-    if ("input_tokens" in usage) {
-      inputTokens += numberField(usage, "input_tokens");
-      outputTokens += numberField(usage, "output_tokens");
-    } else if (stringField(message, "type") === "token_count") {
-      const inner = toRecord(message.data) ?? message;
-      inputTokens += numberField(inner, "input_tokens");
-      outputTokens += numberField(inner, "output_tokens");
-    }
-
-    sessionId =
-      stringField(message, "chatId") ??
-      stringField(message, "chat_id") ??
-      stringField(message, "session_id") ??
-      sessionId;
-  }
-
-  return {
-    inputTokens,
-    outputTokens,
-    rawMessages: messages,
-    resultText,
-    sessionId,
-  };
-}
-
-const LEGACY_ADAPTERS = {
-  "claude-cli": {
-    buildCommand({ model, prompt, maxTurns, sessionId }) {
-      const args = [
-        "-p",
-        "--verbose",
-        "--output-format",
-        "stream-json",
-        "--permission-mode",
-        "bypassPermissions",
-        "--disallowedTools",
-        "AskUserQuestion",
-        "--model",
-        model,
-        "--max-turns",
-        String(maxTurns),
-      ];
-      if (sessionId !== null) {
-        args.push("--resume", sessionId);
-      }
-      args.push(prompt);
-      return { args, command: "claude", cwd: undefined };
-    },
-    parseOutput: parseClaudeCliOutput,
-  },
-  codex: {
-    buildCommand({ model, prompt, projectDir, sessionId }) {
-      const args = ["exec"];
-      if (sessionId !== null) {
-        args.push("resume", sessionId, prompt);
-      } else {
-        args.push(prompt);
-      }
-      args.push(
-        "--full-auto",
-        "--json",
-        "--cd",
-        projectDir,
-        "--skip-git-repo-check",
-        "--sandbox",
-        "workspace-write",
-        "-m",
-        model,
-      );
-      return { args, command: "codex", cwd: undefined };
-    },
-    parseOutput: parseCodexOutput,
-  },
-  cursor: {
-    buildCommand({ model, prompt, projectDir, sessionId }) {
-      const args = [
-        "-p",
-        "-f",
-        "--output-format",
-        "stream-json",
-        "--model",
-        model,
-        "--workspace",
-        projectDir,
-      ];
-      if (sessionId !== null) {
-        args.push("--resume", sessionId);
-      }
-      args.push(prompt);
-      return { args, command: "cursor-agent", cwd: projectDir };
-    },
-    parseOutput: parseCursorOutput,
-  },
-};
-
-function classifyLegacySessionError(result, backend, timeoutS) {
-  if (result.error?.code === "ETIMEDOUT") {
-    return `${backend}: Process timed out after ${timeoutS}s.`;
-  }
-  if (result.signal) {
-    return `${backend}: Process killed by signal ${result.signal}.`;
-  }
-  return result.stderr.trim() || result.stdout.trim() || `${backend}: process failed`;
-}
-
 function buildWorkerEnv() {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
   return env;
-}
-
-function parseLocatorFromSessionId(sessionId) {
-  if (typeof sessionId !== "string" || sessionId.length === 0) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(sessionId);
-    const record = toRecord(parsed);
-    const conversationId =
-      stringField(record, "conversationId") ??
-      stringField(record, "conversation_id") ??
-      stringField(record, "id");
-    if (conversationId !== null) {
-      return {
-        conversationId,
-        providerThreadId:
-          stringField(record, "providerThreadId") ?? stringField(record, "provider_thread_id"),
-        serverSessionId:
-          stringField(record, "serverSessionId") ?? stringField(record, "server_session_id"),
-      };
-    }
-  } catch {}
-
-  return { conversationId: sessionId };
 }
 
 function parseLocator(value) {
@@ -432,6 +110,19 @@ function parseLocator(value) {
   };
 }
 
+function parseLocatorFromSessionId(sessionId) {
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(sessionId);
+    return parseLocator(parsed) ?? { conversationId: sessionId };
+  } catch {
+    return { conversationId: sessionId };
+  }
+}
+
 function parseUsage(value) {
   const record = toRecord(value);
   if (record === null) {
@@ -448,9 +139,7 @@ function parseUsage(value) {
     numberField(record, "completion_tokens") ||
     numberField(record, "candidates");
   const totalTokens =
-    numberField(record, "totalTokens") ||
-    numberField(record, "total_tokens") ||
-    inputTokens + outputTokens;
+    numberField(record, "totalTokens") || numberField(record, "total_tokens") || inputTokens + outputTokens;
   const costUsd = numberField(record, "costUsd") || numberField(record, "cost_usd") || null;
   return {
     costUsd,
@@ -512,15 +201,8 @@ function parseAcpError(value, fallbackCode = "prompt_failed", fallbackMessage = 
 }
 
 function acpProfiles(payload) {
-  const selected =
-    payload.acpBackend ??
-    process.env.KODO_GEMINI_ACP_BACKEND ??
-    (process.env.KODO_OPENCODE === "1" ? "opencode" : "gemini");
-
+  const selected = payload.acpBackend ?? (payload.backend === "opencode" ? "opencode" : "gemini");
   return {
-    selected,
-    provider: "gemini",
-    providerEnvVars: ACP_PROVIDER_ENV_VARS,
     profile:
       selected === "opencode"
         ? {
@@ -535,6 +217,9 @@ function acpProfiles(payload) {
             args: ["acp"],
             costBucket: "gemini_api",
           },
+    provider: "gemini",
+    providerEnvVars: ACP_PROVIDER_ENV_VARS,
+    selected,
   };
 }
 
@@ -576,17 +261,18 @@ class LineTransport {
     this.child = child;
 
     child.once("error", (error) => {
-      const failure = parseAcpError(
-        {
-          code: "transport_start_failed",
-          command: this.config.command,
-          cwd: this.config.cwd ?? null,
-          message: error.message,
-        },
-        "transport_start_failed",
-        error.message,
+      this.failAll(
+        parseAcpError(
+          {
+            code: "transport_start_failed",
+            command: this.config.command,
+            cwd: this.config.cwd ?? null,
+            message: error.message,
+          },
+          "transport_start_failed",
+          error.message,
+        ),
       );
-      this.failAll(failure);
     });
 
     child.once("exit", (code, signal) => {
@@ -611,13 +297,8 @@ class LineTransport {
     });
 
     const rl = createInterface({ input: child.stdout });
-    rl.on("line", (line) => {
-      this.handleLine(line);
-    });
-    rl.once("close", () => {
-      rl.removeAllListeners();
-    });
-
+    rl.on("line", (line) => this.handleLine(line));
+    rl.once("close", () => rl.removeAllListeners());
     void child.stderr.resume();
   }
 
@@ -695,9 +376,7 @@ class LineTransport {
     }
 
     const child = this.child;
-    const exitPromise = new Promise((resolve) => {
-      child.once("exit", resolve);
-    });
+    const exitPromise = new Promise((resolve) => child.once("exit", resolve));
 
     if (!this.closed && !child.stdin.destroyed) {
       try {
@@ -758,12 +437,7 @@ class LineTransport {
       clearTimeout(pending.timeout);
 
       if ("error" in record) {
-        pending.reject(
-          parseAcpError(
-            record.error,
-            requestFailureCode(pending.method),
-          ),
-        );
+        pending.reject(parseAcpError(record.error, requestFailureCode(pending.method)));
         return;
       }
 
@@ -816,6 +490,43 @@ class LineTransport {
       waiter.reject(error);
     }
   }
+}
+
+function invalidNormalized(raw, message) {
+  return {
+    error: parseAcpError(
+      {
+        code: "stream_protocol_error",
+        details: raw,
+        message,
+      },
+      "stream_protocol_error",
+      message,
+    ),
+    ok: false,
+    raw,
+  };
+}
+
+function normalizeSessionEvent(expectedBackend, params, raw, type, modelField) {
+  const locator = parseLocator(params.locator ?? params.thread ?? params);
+  const model = stringField(params, modelField);
+  const backend = stringField(params, "backend") ?? expectedBackend;
+  if (locator === null || model === null || backend !== expectedBackend) {
+    return invalidNormalized(raw, `${expectedBackend} ${type} payload was malformed.`);
+  }
+  return {
+    ok: true,
+    value: {
+      event: {
+        backend,
+        locator,
+        model,
+        type,
+      },
+      raw,
+    },
+  };
 }
 
 function normalizeAcpEvent(backend, envelope) {
@@ -1046,44 +757,7 @@ function normalizeAcpEvent(backend, envelope) {
           raw: envelope,
         },
       };
-    }
   }
-
-function normalizeSessionEvent(expectedBackend, params, raw, type, modelField) {
-  const locator = parseLocator(params.locator ?? params.thread ?? params);
-  const model = stringField(params, modelField);
-  const backend = stringField(params, "backend") ?? expectedBackend;
-  if (locator === null || model === null || backend !== expectedBackend) {
-    return invalidNormalized(raw, `${expectedBackend} ${type} payload was malformed.`);
-  }
-  return {
-    ok: true,
-    value: {
-      event: {
-        backend,
-        locator,
-        model,
-        type,
-      },
-      raw,
-    },
-  };
-}
-
-function invalidNormalized(raw, message) {
-  return {
-    error: parseAcpError(
-      {
-        code: "stream_protocol_error",
-        details: raw,
-        message,
-      },
-      "stream_protocol_error",
-      message,
-    ),
-    ok: false,
-    raw,
-  };
 }
 
 async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
@@ -1096,13 +770,7 @@ async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
     try {
       envelope = await transport.nextEnvelope(eventTimeoutMs);
     } catch (error) {
-      return {
-        error,
-        events,
-        locator,
-        ok: false,
-        usage: lastUsage,
-      };
+      return { error, events, locator, ok: false, usage: lastUsage };
     }
 
     if (envelope === null) {
@@ -1123,28 +791,13 @@ async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
     }
 
     if (envelope.kind === "protocol_error") {
-      return {
-        error: envelope.error,
-        events,
-        locator,
-        ok: false,
-        usage: lastUsage,
-      };
+      return { error: envelope.error, events, locator, ok: false, usage: lastUsage };
     }
 
     const normalized = normalizeAcpEvent(backend, envelope.message);
     if (!normalized.ok) {
-      events.push({
-        event: { error: normalized.error, type: "error" },
-        raw: normalized.raw,
-      });
-      return {
-        error: normalized.error,
-        events,
-        locator,
-        ok: false,
-        usage: lastUsage,
-      };
+      events.push({ event: { error: normalized.error, type: "error" }, raw: normalized.raw });
+      return { error: normalized.error, events, locator, ok: false, usage: lastUsage };
     }
 
     events.push(normalized.value);
@@ -1154,22 +807,13 @@ async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
       lastUsage = current.usage;
       continue;
     }
-
     if (current.type === "session.created" || current.type === "session.resumed") {
       locator = current.locator;
       continue;
     }
-
     if (current.type === "error") {
-      return {
-        error: current.error,
-        events,
-        locator,
-        ok: false,
-        usage: lastUsage,
-      };
+      return { error: current.error, events, locator, ok: false, usage: lastUsage };
     }
-
     if (current.type === "result") {
       return {
         events,
@@ -1259,7 +903,6 @@ async function runAcpQuery(payload) {
           backend: profile.backend,
           cwd: payload.projectDir,
           locator: parseLocatorFromSessionId(payload.resumeSessionId),
-          metadata: toRecord(payload.metadata) ?? undefined,
           model: payload.model,
         },
         Math.min(timeoutMs, STARTUP_TIMEOUT_MS),
@@ -1271,7 +914,6 @@ async function runAcpQuery(payload) {
         {
           backend: profile.backend,
           cwd: payload.projectDir,
-          metadata: toRecord(payload.metadata) ?? undefined,
           model: payload.model,
           systemPrompt: payload.systemPrompt ?? null,
         },
@@ -1285,7 +927,6 @@ async function runAcpQuery(payload) {
       {
         cwd: payload.projectDir,
         maxTurns: payload.maxTurns,
-        metadata: toRecord(payload.metadata) ?? undefined,
         prompt: payload.prompt,
       },
       timeoutMs,
@@ -1318,7 +959,6 @@ async function runAcpQuery(payload) {
       const finalLocator = outcome.locator ?? locator;
       return {
         acpBackend: profileInfo.selected,
-        conversationLog: null,
         costBucket: profile.costBucket,
         elapsedS,
         errorCode: outcome.error.code ?? null,
@@ -1340,7 +980,6 @@ async function runAcpQuery(payload) {
     const finalLocator = outcome.result.locator ?? locator;
     return {
       acpBackend: profileInfo.selected,
-      conversationLog: null,
       costBucket: profile.costBucket,
       elapsedS,
       errorCode: null,
@@ -1364,62 +1003,10 @@ async function runAcpQuery(payload) {
   }
 }
 
-function runLegacyQuery(payload) {
-  const adapter = LEGACY_ADAPTERS[payload.backend];
-  const finalPrompt =
-    payload.systemPrompt && payload.systemPrompt.length > 0
-      ? `${payload.systemPrompt}\n\n${payload.prompt}`
-      : payload.prompt;
-  const command = adapter.buildCommand({
-    maxTurns: payload.maxTurns,
-    model: payload.model,
-    projectDir: payload.projectDir,
-    prompt: finalPrompt,
-    sessionId: payload.resumeSessionId,
-  });
-  const startedAt = Date.now();
-  const result = spawnSync(command.command, command.args, {
-    cwd: command.cwd,
-    encoding: "utf8",
-    env: buildWorkerEnv(),
-    killSignal: "SIGKILL",
-    maxBuffer: MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: (payload.timeoutS ?? DEFAULT_TIMEOUT_S) * 1000,
-  });
-  const parsed = adapter.parseOutput({
-    stderr: result.stderr ?? "",
-    stdout: result.stdout ?? "",
-  });
-  const isError =
-    (result.status ?? 1) !== 0 ||
-    result.signal !== null ||
-    result.error !== undefined ||
-    parsed.isError === true;
-  const text =
-    parsed.resultText?.trim() ||
-    (isError
-      ? classifyLegacySessionError(result, payload.backend, payload.timeoutS ?? DEFAULT_TIMEOUT_S)
-      : "");
-
-  return {
-    elapsedS: Number(((Date.now() - startedAt) / 1000).toFixed(3)),
-    inputTokens: parsed.inputTokens ?? null,
-    isError,
-    outputTokens: parsed.outputTokens ?? null,
-    rawMessages: parsed.rawMessages ?? [],
-    sessionId: parsed.sessionId ?? payload.resumeSessionId ?? null,
-    text,
-    usageRaw: parsed.usageRaw ?? null,
-  };
-}
-
 async function main() {
   const [, , payloadPath, outputPath] = process.argv;
   const payload = JSON.parse(readFileSync(payloadPath, "utf8"));
-  const result =
-    payload.backend === "gemini-cli" ? await runAcpQuery(payload) : runLegacyQuery(payload);
-
+  const result = await runAcpQuery(payload);
   writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
 }
 

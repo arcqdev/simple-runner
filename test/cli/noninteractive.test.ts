@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
@@ -53,6 +53,11 @@ afterEach(() => {
 });
 
 describe("runCli noninteractive runtime resolution", () => {
+  beforeEach(() => {
+    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("PATH", "");
+  });
+
   it("loads goal text from --goal-file and persists resolved params", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
@@ -95,13 +100,13 @@ describe("runCli noninteractive runtime resolution", () => {
     }
     const binDir = path.join(homeDir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "codex"), "");
+    writeFileSync(path.join(binDir, "gemini"), "");
     vi.stubEnv("PATH", binDir);
     const project = makeProjectDir();
     const io = captureOutput();
 
     expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
-    expect(io.stdout()).toContain("Orchestrator: codex (gpt-5.4)");
+    expect(io.stdout()).toContain("Orchestrator: gemini-cli (gemini-3-flash)");
     io.restore();
   });
 
@@ -172,8 +177,8 @@ describe("runCli noninteractive runtime resolution", () => {
       projectConfigPath(project),
       `${JSON.stringify({
         team: "quick",
-        orchestrator: "codex",
-        orchestratorModel: "gpt-5.4",
+        orchestrator: "gemini-cli",
+        orchestratorModel: "gemini-3-flash",
         maxExchanges: 18,
         maxCycles: 2,
         autoCommit: false,
@@ -186,13 +191,13 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Previous config found:");
     expect(io.stdout()).toContain("Team: quick");
     expect(io.stdout()).toContain("Mode: default");
-    expect(io.stdout()).toContain("Orchestrator: codex (gpt-5.4)");
+    expect(io.stdout()).toContain("Orchestrator: gemini-cli (gemini-3-flash)");
     expect(io.stdout()).toContain("Auto-commit: disabled");
     expect(io.stdout()).toContain("Run completed.");
     io.restore();
   });
 
-  it("auto-recovers a built-in team when a different worker backend is available", () => {
+  it("uses the built-in ACP team when a supported ACP runtime is available", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     for (const key of API_KEY_ENV_VARS) {
@@ -200,22 +205,14 @@ describe("runCli noninteractive runtime resolution", () => {
     }
     const binDir = path.join(homeDir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "codex"), "");
+    writeFileSync(path.join(binDir, "gemini"), "");
     vi.stubEnv("PATH", binDir);
     const project = makeProjectDir();
     const io = captureOutput();
 
     expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
-    expect(io.stdout()).toContain("Recovered team 'full' by generating a runnable config");
-
-    const savedPath = path.join(homeDir, ".kodo", "teams", "full.json");
-    expect(JSON.parse(readFileSync(savedPath, "utf8"))).toMatchObject({
-      agents: {
-        worker_fast: {
-          backend: "codex",
-        },
-      },
-    });
+    expect(io.stdout()).toContain("Team: full");
+    expect(io.stdout()).toContain("Orchestrator: gemini-cli (gemini-3-flash)");
     io.restore();
   });
 
@@ -230,9 +227,9 @@ describe("runCli noninteractive runtime resolution", () => {
         description: "user full",
         agents: {
           worker_fast: {
-            backend: "codex",
+          backend: "gemini-cli",
             description: "user team agent",
-            model: "gpt-5.4",
+            model: "gemini-3-flash",
           },
         },
       })}\n`,
@@ -246,9 +243,9 @@ describe("runCli noninteractive runtime resolution", () => {
         description: "project full",
         agents: {
           tester: {
-            backend: "codex",
+            backend: "gemini-cli",
             description: "project team agent",
-            model: "gpt-5.4",
+            model: "gemini-3-flash",
           },
         },
       })}\n`,
@@ -278,8 +275,8 @@ describe("runCli noninteractive runtime resolution", () => {
       path.join(project, ".kodo", "last-config.json"),
       `${JSON.stringify({
         mode: "full",
-        orchestrator: "codex",
-        orchestratorModel: "gpt-5.4",
+        orchestrator: "gemini-cli",
+        orchestratorModel: "gemini-3-flash",
         maxExchanges: 30,
         maxCycles: 5,
       })}\n`,
@@ -290,8 +287,8 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(runCli(["--project", project])).toBe(0);
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "full",
-      orchestrator: "codex",
-      orchestratorModel: "gpt-5.4",
+      orchestrator: "gemini-cli",
+      orchestratorModel: "gemini-3-flash",
       maxExchanges: 30,
       maxCycles: 5,
     });

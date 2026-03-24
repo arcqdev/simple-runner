@@ -200,7 +200,8 @@ export type RuntimeOrchestrator =
   | ClaudeCodeRuntimeOrchestrator
   | CodexCliRuntimeOrchestrator
   | CursorCliRuntimeOrchestrator
-  | GeminiCliRuntimeOrchestrator;
+  | GeminiCliRuntimeOrchestrator
+  | OpencodeRuntimeOrchestrator;
 
 const GIT_AUTHOR_ENV = {
   GIT_AUTHOR_EMAIL: "noreply@github.com",
@@ -222,6 +223,8 @@ const RE_SIGNAL_AUTHORITATIVE = new RegExp(
 
 function fallbackWorkerBackend(orchestrator: string): TeamAgentConfig["backend"] {
   switch (orchestrator) {
+    case "opencode":
+      return "opencode";
     case "codex":
       return "codex";
     case "cursor":
@@ -244,6 +247,8 @@ function orchestratorCostBucket(orchestrator: string): string {
     case "cursor":
       return "cursor_subscription";
     case "gemini-cli":
+      return "gemini_api";
+    case "opencode":
       return "gemini_api";
     default:
       return "unknown";
@@ -2199,7 +2204,7 @@ abstract class RuntimeOrchestratorBase {
 }
 
 abstract class CliRuntimeOrchestratorBase extends RuntimeOrchestratorBase {
-  protected constructor(kind: "codex" | "cursor" | "gemini-cli", model: string) {
+  protected constructor(kind: "codex" | "cursor" | "gemini-cli" | "opencode", model: string) {
     super(kind, model);
   }
 }
@@ -2273,6 +2278,12 @@ export class GeminiCliRuntimeOrchestrator extends CliRuntimeOrchestratorBase {
   }
 }
 
+export class OpencodeRuntimeOrchestrator extends CliRuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("opencode", model);
+  }
+}
+
 export function buildRuntimeOrchestrator(params: ResolvedRuntimeParams): RuntimeOrchestrator {
   switch (params.orchestrator) {
     case "api":
@@ -2285,6 +2296,8 @@ export function buildRuntimeOrchestrator(params: ResolvedRuntimeParams): Runtime
       return new CursorCliRuntimeOrchestrator(params.orchestratorModel);
     case "gemini-cli":
       return new GeminiCliRuntimeOrchestrator(params.orchestratorModel);
+    case "opencode":
+      return new OpencodeRuntimeOrchestrator(params.orchestratorModel);
     default:
       throw new Error(`Unsupported orchestrator: ${params.orchestrator}`);
   }

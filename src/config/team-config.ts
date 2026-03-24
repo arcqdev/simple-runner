@@ -364,16 +364,16 @@ export function generateAutoTeam(
   }
 
   const fastFallbacks: Array<[TeamBackend, string]> = [
+    ["gemini-cli", "gemini-3-flash"],
+    ["opencode", "gemini-2.5-flash"],
     ["cursor", "composer-1.5"],
     ["codex", "gpt-5.4"],
-    ["gemini-cli", "gemini-2.5-flash"],
-    ["opencode", "gemini-2.5-flash"],
     ["claude", "sonnet"],
   ];
   const smartFallbacks: Array<[TeamBackend, string]> = [
-    ["claude", "opus"],
+    ["opencode", "gemini-2.5-flash"],
     ["gemini-cli", "gemini-3-pro"],
-    ["opencode", "gemini-3-flash"],
+    ["claude", "opus"],
     ["cursor", "composer-1.5"],
   ];
 

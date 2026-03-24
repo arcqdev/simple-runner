@@ -167,7 +167,14 @@ const RUNTIME_MODEL_CATALOG: Record<
   },
 };
 
-const CLI_ORCHESTRATORS = new Set(["claude-code", "gemini-cli", "codex", "cursor", "kimi-code"]);
+const CLI_ORCHESTRATORS = new Set([
+  "claude-code",
+  "gemini-cli",
+  "opencode",
+  "codex",
+  "cursor",
+  "kimi-code",
+]);
 
 function hasEnvVar(name: string, env: NodeJS.ProcessEnv): boolean {
   return typeof env[name] === "string" && env[name]!.trim().length > 0;

@@ -8,19 +8,18 @@
   },
   "agents": {
     "worker_fast": {
-      "backend": "cursor",
-      "model": "composer-1.5",
+      "backend": "gemini-cli",
+      "model": "gemini-3-flash",
       "description": "Fast coding agent — use for straightforward tasks where speed matters.\nDirective: 1-3 sentences describing desired BEHAVIOR, not implementation.\nIf stuck, set new_conversation=true with a fresh directive.",
       "max_turns": 30,
       "timeout_s": 1800
     },
     "worker_smart": {
-      "backend": "claude",
-      "model": "opus",
+      "backend": "opencode",
+      "model": "gemini-2.5-flash",
       "description": "Powerful reasoning agent — use for complex tasks, debugging, or when the fast worker struggled.\nDirective: 1-3 sentences describing desired BEHAVIOR, not implementation.\nIf stuck, set new_conversation=true with a fresh directive.",
       "max_turns": 30,
-      "timeout_s": 1800,
-      "fallback_model": "sonnet"
+      "timeout_s": 1800
     }
   }
 }

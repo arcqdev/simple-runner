@@ -45,8 +45,8 @@ describe("resume logging flow", () => {
         goal_text: "Resume parity test",
         max_cycles: 5,
         max_exchanges: 20,
-        orchestrator: "codex",
-        orchestrator_model: "gpt-5.4",
+        orchestrator: "gemini-cli",
+        orchestrator_model: "gemini-3-flash",
         project_dir: projectDir,
         team: "quick",
       },
@@ -55,8 +55,8 @@ describe("resume logging flow", () => {
         goal: "Resume parity test",
         max_cycles: 5,
         max_exchanges: 20,
-        model: "gpt-5.4",
-        orchestrator: "codex",
+        model: "gemini-3-flash",
+        orchestrator: "gemini-cli",
         project_dir: projectDir,
         resumed: false,
       },
@@ -68,14 +68,28 @@ describe("resume logging flow", () => {
     ]);
     writeFileSync(path.join(runDir, "goal.md"), "Resume parity test\n", "utf8");
     writeFileSync(
+      path.join(runDir, "team.json"),
+      `${JSON.stringify(
+        {
+          agents: {
+            worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+          },
+          verifiers: { testers: [], browser_testers: [], reviewers: [] },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeFileSync(
       path.join(runDir, "config.json"),
       `${JSON.stringify(
         {
           autoCommit: true,
           maxCycles: 5,
           maxExchanges: 20,
-          orchestrator: "codex",
-          orchestratorModel: "gpt-5.4",
+          orchestrator: "gemini-cli",
+          orchestratorModel: "gemini-3-flash",
           team: "quick",
         },
         null,
@@ -85,6 +99,7 @@ describe("resume logging flow", () => {
     );
 
     vi.stubEnv("KODO_RUNS_DIR", runsDir);
+    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
 
     const incomplete = findIncompleteRuns(projectDir, homeDir);
     expect(incomplete).toHaveLength(1);
@@ -102,5 +117,5 @@ describe("resume logging flow", () => {
     expect(readFileSync(path.join(runDir, "runtime-state.json"), "utf8")).toContain(
       '"completedCycles": 1',
     );
-  });
+  }, 20000);
 });

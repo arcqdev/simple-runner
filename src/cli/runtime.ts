@@ -39,7 +39,14 @@ export type ResolvedGoal = {
 
 type SavedRuntimeParams = Partial<ResolvedRuntimeParams> & Record<string, unknown>;
 
-const CLI_ORCHESTRATORS = new Set(["claude-code", "gemini-cli", "codex", "cursor", "kimi-code"]);
+const CLI_ORCHESTRATORS = new Set([
+  "claude-code",
+  "gemini-cli",
+  "opencode",
+  "codex",
+  "cursor",
+  "kimi-code",
+]);
 
 function parseOrchestratorFlag(value: string | null): {
   backend: string | null;
@@ -74,6 +81,12 @@ function genericApiKeyError(orchestrator: string, model: string | null): string 
 
 function preferredOrchestrator(): string {
   const backends = availableBackends();
+  if (backends["gemini-cli"]) {
+    return "gemini-cli";
+  }
+  if (backends.opencode) {
+    return "opencode";
+  }
   if (backends.claude) {
     return "claude-code";
   }
@@ -85,9 +98,6 @@ function preferredOrchestrator(): string {
   }
   if (backends.codex) {
     return "codex";
-  }
-  if (backends["gemini-cli"]) {
-    return "gemini-cli";
   }
   return "api";
 }
@@ -104,6 +114,8 @@ function defaultCliModel(orchestrator: string): string {
       return "gpt-5.4";
     case "gemini-cli":
       return "gemini-3-flash";
+    case "opencode":
+      return "gemini-2.5-flash";
     default:
       return defaultApiModel();
   }
@@ -172,11 +184,14 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
   const choices: string[] = [];
 
   choices.push("api (recommended — delegates cleanly, pay-per-token)");
+  if (backends["gemini-cli"]) {
+    choices.push("gemini-cli (ACP runtime, Gemini native)");
+  }
+  if (backends.opencode) {
+    choices.push("opencode (ACP runtime, Gemini provider)");
+  }
   if (backends.claude) {
     choices.push("claude-code (free on Max subscription)");
-  }
-  if (backends["gemini-cli"]) {
-    choices.push("gemini-cli (free with Google account)");
   }
   if (backends.codex) {
     choices.push("codex (free on Codex subscription)");
@@ -221,6 +236,9 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
       break;
     case "gemini-cli":
       modelChoices = ["gemini-3-flash", "gemini-3-pro", "gemini-2.5-flash", "(custom)"];
+      break;
+    case "opencode":
+      modelChoices = ["gemini-2.5-flash", "gemini-3-flash", "gemini-3-pro", "(custom)"];
       break;
     case "codex":
       modelChoices = ["gpt-5.4", "gpt-5.3-codex", "o3", "(custom)"];
@@ -342,10 +360,11 @@ function selectInteractiveRuntimeParams(projectDir: string): ResolvedRuntimePara
 
   const backends = availableBackends();
   const backendSummary = [
+    `Gemini CLI: ${backends["gemini-cli"] ? "yes" : "not found"}`,
+    `OpenCode: ${backends.opencode ? "yes" : "not found"}`,
     `Claude Code: ${backends.claude ? "yes" : "not found"}`,
     `Codex: ${backends.codex ? "yes" : "not found"}`,
     `Cursor: ${backends.cursor ? "yes" : "not found"}`,
-    `Gemini CLI: ${backends["gemini-cli"] ? "yes" : "not found"}`,
   ];
   writeStdout(`  Backends: ${backendSummary.join(" | ")}\n\n`);
 

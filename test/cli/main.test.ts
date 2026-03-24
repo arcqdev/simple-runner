@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
@@ -23,10 +23,16 @@ function makeProjectDir(): string {
 afterEach(() => {
   resetDotEnvForTests();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   setPromptAdapter(null);
 });
 
 describe("runCli main shell", () => {
+  beforeEach(() => {
+    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("PATH", "");
+  });
+
   it("prints help when no arguments are provided", () => {
     const io = captureOutput();
 
@@ -47,6 +53,7 @@ describe("runCli main shell", () => {
 
   it("rewrites the test alias into the main parser", () => {
     const project = makeProjectDir();
+    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
     const io = captureOutput();
 
     expect(runCli(["test", "--project", project])).toBe(0);
@@ -99,6 +106,7 @@ describe("runCli main shell", () => {
 
   it("accepts a valid --test target and summarizes the invocation", () => {
     const project = makeProjectDir();
+    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
     const target = path.join(project, "src");
     mkdirSync(target);
     writeFileSync(path.join(target, "index.ts"), "export {};\n");
@@ -199,6 +207,7 @@ describe("runCli main shell", () => {
 
   it("emits report content in JSON mode for specialized runs", () => {
     const project = makeProjectDir();
+    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
     const io = captureOutput();
 
     expect(runCli(["--test", "--project", project, "--json"])).toBe(0);

@@ -2,7 +2,7 @@
 
 ## Goal
 
-This document defines the ACP-facing runtime contract that later implementation specs must target. It captures the current session-layer assumptions in the subprocess runtime and names the semantic gaps that ACP needs to close during migration.
+This document defines the ACP-facing runtime contract for the current runtime. It records the remaining compatibility assumptions around orchestration state and logging now that session execution goes through ACP by default.
 
 The typed source of truth lives in `src/runtime/acp-contract.ts`. This document explains why those types look the way they do and how they map onto the current code.
 
@@ -10,13 +10,10 @@ The typed source of truth lives in `src/runtime/acp-contract.ts`. This document 
 
 ### `src/runtime/sessions.ts`
 
-- Session execution is synchronous and subprocess-based: `Session.query()` blocks until one vendor CLI exits.
-- Session identity is a single opaque string, but the concrete field name is vendor-shaped: `session_id` for Claude/Codex/Gemini and `chat_id` for Cursor.
-- Prompt submission is coupled to process startup. There is no persistent transport lifecycle, initialize handshake, or capability negotiation.
-- Streaming output is collapsed into a single `SessionQueryResult.text` plus optional `rawMessages` log output.
-- Usage accounting is best-effort and adapter-specific.
-- Error handling is inferred from exit code, stderr/stdout snippets, and regex classifiers rather than structured protocol errors.
-- Gemini resume is not a true conversation locator today. The adapter toggles `--resume` and stores `"last"` as a synthetic session id when usage exists.
+- Session execution is ACP-backed for Gemini and OpenCode.
+- Session identity is still persisted as a single string in orchestration state, even though ACP provides a richer conversation locator.
+- Streaming output is still collapsed into a single `SessionQueryResult.text` plus optional `rawMessages` log output.
+- Usage accounting and provider metadata are normalized from ACP events before they hit the existing logging surface.
 
 ### `src/runtime/orchestration.ts`
 
@@ -27,9 +24,9 @@ The typed source of truth lives in `src/runtime/acp-contract.ts`. This document 
 
 ### `src/runtime/backends.ts`
 
-- Backend discovery is executable-based (`claude`, `codex`, `cursor-agent`, `gemini`).
-- Team-facing backend names are mapped directly to executable/preflight keys through `TEAM_BACKEND_MAP`.
-- Preflight validates `--version` on binaries and reuses subprocess error classification to guess configuration/auth problems.
+- Backend discovery still checks local executables, but ACP-backed preflight now verifies transport startup for Gemini and OpenCode.
+- Team-facing backend names still flow through `TEAM_BACKEND_MAP`, with Gemini and OpenCode as the ACP-native runtime choices.
+- Legacy backend names can still appear in config and logs as compatibility inputs, but they are no longer the primary runtime path.
 
 ## ACP Contract
 
@@ -63,28 +60,25 @@ Gemini and OpenCode are both:
 
 - ACP backend kind: `gemini`
 - Provider: `gemini`
-- Team backend mapping during migration: existing `gemini-cli` team/backend settings map here first
+- Team backend mapping: existing `gemini-cli` team/backend settings map here
 - Default model: `gemini-3-flash`
 
 ### OpenCode
 
 - ACP backend kind: `opencode`
 - Provider: `gemini`
-- Team backend mapping during migration: not exposed as a team backend yet
+- Team backend mapping: exposed directly as the `opencode` team/runtime choice
 - Default model: `gemini-2.5-flash`
 - Credential behavior: reuse Gemini credentials and provider defaults unless a later spec introduces an OpenCode-specific provider profile
 
 ## Known Semantic Gaps
 
-- Current `SessionQueryResult` assumes one terminal text result. ACP supports richer event streams, so adapters will need a normalization layer instead of lossy direct parsing.
-- Current runtime state persists a bare session id string. ACP requires a structured locator to resume safely across transports and providers.
-- Current preflight checks binary presence and `--version`. ACP preflight will need to verify transport startup and initialize/capability negotiation, not just executable existence.
-- Current session timeouts kill the whole subprocess query. ACP introduces transport startup timeouts, per-query timeouts, and server-side retryable failures that need separate handling.
-- Current Gemini resume behavior is weaker than ACP resume requirements and must not be treated as equivalent.
-- Cost buckets are currently backend-fixed strings. ACP usage may come from provider profiles or server-emitted accounting, so the accounting layer must tolerate both.
+- Current `SessionQueryResult` still assumes one terminal text result even though ACP emits richer streamed events.
+- Current runtime state persists a bare session id string. ACP provides a structured locator that should eventually be persisted directly.
+- Cost buckets are still coarse and backend-shaped even though ACP can surface richer provider accounting.
 
 ## Implementation Guardrails For Later Specs
 
-- Keep user-facing backend labels stable while migration is in progress.
-- Translate existing `Session` and orchestration state onto ACP as a compatibility layer first; do not force a full runtime rewrite in one spec.
-- Preserve raw ACP events in logs whenever feasible so future debugging does not depend on vendor-specific parsers again.
+- Keep user-facing backend labels stable where compatibility still matters.
+- Continue translating the existing `Session` and orchestration state onto ACP until runtime state persists structured locators directly.
+- Preserve raw ACP events in logs whenever feasible so future debugging does not regress to vendor-specific parsing.
