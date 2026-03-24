@@ -328,7 +328,7 @@ Notes:
 | `HTTPServer` / `SimpleHTTPRequestHandler` | Local log-viewer server                                              | `matched` | TS uses Node `http` with equivalent endpoint responsibilities                 |
 | CLI backends on `PATH`                    | `claude`, `cursor-agent`, `codex`, `gemini`, `kimi`                  | `partial` | TS checks presence, but richer preflight/error classification remains pending |
 | Provider API env vars                     | Anthropic, Gemini/Google, OpenAI, DeepSeek, OpenRouter, Mistral, xAI | `pending` | Full adapter/runtime parity is still ahead                                    |
-| Git worktree / merge helpers              | Parallel stage persistence and auto-commit                           | `pending` | Not yet ported in TS runtime                                                  |
+| Git worktree / merge helpers              | Parallel stage persistence and auto-commit                           | `partial` | TS now has worktree isolation, cleanup, commit handling, and merge-back for parallel stages |
 
 ## Environment Variables And Backend Credential Expectations
 

@@ -324,6 +324,18 @@ function uniqueRunId(label: string): string {
   return `${label}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function initGitRepo(projectDir: string): void {
+  spawnSync("git", ["init"], { cwd: projectDir, stdio: "ignore" });
+  spawnSync("git", ["config", "user.email", "test@example.com"], {
+    cwd: projectDir,
+    stdio: "ignore",
+  });
+  spawnSync("git", ["config", "user.name", "Test User"], { cwd: projectDir, stdio: "ignore" });
+  writeFileSync(path.join(projectDir, "README.md"), "seed\n", "utf8");
+  spawnSync("git", ["add", "README.md"], { cwd: projectDir, stdio: "ignore" });
+  spawnSync("git", ["commit", "-m", "seed"], { cwd: projectDir, stdio: "ignore" });
+}
+
 function buildParams(orchestrator: string, orchestratorModel: string): ResolvedRuntimeParams {
   return {
     autoCommit: false,
@@ -447,7 +459,7 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"orchestrator_done_rejected"');
     expect(log).toContain('"event":"orchestrator_retry"');
     expect(log).toContain('"event":"orchestrator_done_accepted"');
-  });
+  }, 10000);
 
   it("supports verification=skip without running verifiers", () => {
     const binDir = makeTempDir("kodo-bin");
@@ -641,15 +653,7 @@ describe("runtime orchestration", () => {
       },
     });
 
-    spawnSync("git", ["init"], { cwd: projectDir, stdio: "ignore" });
-    spawnSync("git", ["config", "user.email", "test@example.com"], {
-      cwd: projectDir,
-      stdio: "ignore",
-    });
-    spawnSync("git", ["config", "user.name", "Test User"], { cwd: projectDir, stdio: "ignore" });
-    writeFileSync(path.join(projectDir, "README.md"), "seed\n", "utf8");
-    spawnSync("git", ["add", "README.md"], { cwd: projectDir, stdio: "ignore" });
-    spawnSync("git", ["commit", "-m", "seed"], { cwd: projectDir, stdio: "ignore" });
+    initGitRepo(projectDir);
 
     const runDir = RunDir.create(projectDir, uniqueRunId("runtime_staged"));
     init(runDir);
@@ -792,7 +796,9 @@ describe("runtime orchestration", () => {
     process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
 
     const projectDir = makeTempDir("parallel-project");
-    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    const stateDir = makeTempDir("parallel-state");
+    process.env.FAKE_AGENT_STATE_DIR = stateDir;
+    initGitRepo(projectDir);
     writeProjectTeam(projectDir, {
       agents: {
         worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
@@ -810,8 +816,20 @@ describe("runtime orchestration", () => {
           context: "Maintain the simple project.",
           stages: [
             { index: 1, name: "Setup", description: "Create the initial setup artifact." },
-            { index: 2, name: "Parallel A", description: "Run branch A in parallel.", parallel_group: 1 },
-            { index: 3, name: "Parallel B", description: "Run branch B in parallel.", parallel_group: 1 },
+            {
+              index: 2,
+              name: "Parallel A",
+              description: "Run branch A in parallel.",
+              parallel_group: 1,
+              persist_changes: true,
+            },
+            {
+              index: 3,
+              name: "Parallel B",
+              description: "Run branch B in parallel.",
+              parallel_group: 1,
+              persist_changes: true,
+            },
             { index: 4, name: "Final Sequential", description: "Finish with a sequential stage after the parallel group." },
           ],
         },
@@ -823,7 +841,7 @@ describe("runtime orchestration", () => {
 
     const result = runOrchestration(
       runDir,
-      buildParams("codex", "gpt-5.4"),
+      { ...buildParams("codex", "gpt-5.4"), autoCommit: true },
       buildGoal("Run mixed staged execution"),
       projectFlags(projectDir),
     );
@@ -833,7 +851,7 @@ describe("runtime orchestration", () => {
     expect(readFileSync(path.join(projectDir, "parallel-b.txt"), "utf8")).toContain("done");
     expect(readFileSync(path.join(projectDir, "final-sequential.txt"), "utf8")).toContain("done");
 
-    const starts = readFileSync(path.join(projectDir, "parallel-start.txt"), "utf8")
+    const starts = readFileSync(path.join(stateDir, "parallel-start.txt"), "utf8")
       .trim()
       .split("\n")
       .map((line) => Number(line.split(":")[1]));
@@ -843,7 +861,54 @@ describe("runtime orchestration", () => {
     const log = readFileSync(runDir.logFile, "utf8");
     expect(log).toContain('"event":"parallel_group_start"');
     expect(log).toContain('"event":"parallel_group_end"');
+    expect(log).toContain('"event":"persist_stage_merge"');
     expect(log).toContain("Final Sequential");
+  }, 12000);
+
+  it("discards non-persisted parallel worktree changes", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("parallel-discard-project");
+    process.env.FAKE_AGENT_STATE_DIR = makeTempDir("parallel-discard-state");
+    initGitRepo(projectDir);
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        worker_slow: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_parallel_discard"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { index: 1, name: "Parallel A", description: "Run branch A in parallel.", parallel_group: 1 },
+            { index: 2, name: "Parallel B", description: "Run branch B in parallel.", parallel_group: 1 },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Run isolated parallel work"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(existsSync(path.join(projectDir, "parallel-a.txt"))).toBe(false);
+    expect(existsSync(path.join(projectDir, "parallel-b.txt"))).toBe(false);
   });
 
   it("runs the api orchestrator with team workers", () => {

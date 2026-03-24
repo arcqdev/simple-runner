@@ -18,6 +18,16 @@ import {
 import { emit as emitLogEvent, type RunDir } from "../logging/log.js";
 import { availableBackends } from "./backends.js";
 import {
+  cleanupStaleWorktrees,
+  commitWorktreeChanges,
+  createWorktree,
+  deleteWorktreeBranch,
+  mergeWorktreeBranch,
+  removeWorktree,
+  removeWorktreeKeepBranch,
+  type WorktreeHandle,
+} from "./git-worktree.js";
+import {
   createSessionForOrchestrator,
   createSessionForTeamAgent,
   type SessionBackend,
@@ -124,6 +134,7 @@ type ParallelStageRuntime = {
   cyclesUsed: number;
   finished: boolean;
   goalText: string;
+  persistReady: boolean;
   priorSummary: string;
   sessionId: string | null;
   stage: GoalStage;
@@ -893,6 +904,7 @@ function runVerification(
   goal: string,
   summary: string,
   runDir: RunDir,
+  projectDir: string,
   cycleIndex: number,
   verificationState: VerificationState,
   options: {
@@ -936,7 +948,7 @@ function runVerification(
     }
     const response = agent.session.query(prompt, {
       maxTurns: agent.config.max_turns ?? 8,
-      projectDir: runDir.projectDir,
+      projectDir,
     });
     emitLogEvent("done_verification", {
       agent: agent.name,
@@ -958,7 +970,7 @@ function runVerification(
       try {
         const response = verifier.query(prompt, {
           maxTurns: fallback.config.max_turns ?? 8,
-          projectDir: runDir.projectDir,
+          projectDir,
         });
         emitLogEvent("done_verification", {
           agent: fallback.name,
@@ -1321,11 +1333,43 @@ abstract class RuntimeOrchestratorBase {
       throw new Error("No runnable workers available for the selected team.");
     }
 
+    cleanupStaleWorktrees(flags.project);
+    const worktrees = new Map<number, WorktreeHandle>();
+    let worktreeFailed = false;
+    for (const stage of group) {
+      try {
+        const worktree = createWorktree(flags.project, `stage-${stage.index}`);
+        worktrees.set(stage.index, worktree);
+      } catch (error) {
+        worktreeFailed = true;
+        emitLogEvent("worktree_cleanup_error", {
+          stage_index: stage.index,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (worktreeFailed) {
+      for (const [stageIndex, worktree] of worktrees.entries()) {
+        try {
+          removeWorktree(flags.project, worktree.worktreeDir, worktree.branchName);
+        } catch (error) {
+          emitLogEvent("worktree_cleanup_error", {
+            stage_index: stageIndex,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      closeAgents(allAgents);
+      return this.runParallelGroupSequentialFallback(runDir, params, flags, state, plan, group);
+    }
+
     const sharedSummaries = [...state.stageSummaries];
     const stageRuntimes: ParallelStageRuntime[] = group.map((stage, index) => ({
       cyclesUsed: 0,
       finished: false,
       goalText: composeStageGoal(plan, stage, sharedSummaries),
+      persistReady: false,
       priorSummary: "",
       sessionId: null,
       stage,
@@ -1357,10 +1401,10 @@ abstract class RuntimeOrchestratorBase {
             backend: stage.worker.session.backend,
             maxTurns: stage.worker.config.max_turns ?? params.maxExchanges,
             model: stage.worker.session.model,
-            projectDir: flags.project,
+            projectDir: worktrees.get(stage.stage.index)?.worktreeDir ?? flags.project,
             prompt: buildWorkerPrompt(
               stage.goalText,
-              flags.project,
+              worktrees.get(stage.stage.index)?.worktreeDir ?? flags.project,
               stage.priorSummary,
               stage.worker,
               stage.cyclesUsed + 1,
@@ -1403,6 +1447,7 @@ abstract class RuntimeOrchestratorBase {
               stageRuntime.goalText,
               stageSummary,
               runDir,
+              worktrees.get(stageRuntime.stage.index)?.worktreeDir ?? flags.project,
               state.completedCycles + groupCyclesUsed + 1,
               verificationState,
               {
@@ -1414,6 +1459,7 @@ abstract class RuntimeOrchestratorBase {
             );
             if (verificationIssues === null) {
               stageRuntime.finished = true;
+              stageRuntime.persistReady = true;
               emitLogEvent("orchestrator_done_accepted", {
                 cycle_index: state.completedCycles + groupCyclesUsed + 1,
                 stage_index: stageRuntime.stage.index,
@@ -1493,8 +1539,116 @@ abstract class RuntimeOrchestratorBase {
         summary,
       };
     } finally {
+      const finishedStageIndexes = new Set(
+        stageRuntimes
+          .filter((stageRuntime) => stageRuntime.persistReady)
+          .map((stageRuntime) => stageRuntime.stage.index),
+      );
+      const branchesToMerge: Array<{ branchName: string; stageIndex: number; stageName: string }> = [];
+
+      for (const stage of group) {
+        const worktree = worktrees.get(stage.index);
+        if (worktree === undefined) {
+          continue;
+        }
+        if (stage.persist_changes && finishedStageIndexes.has(stage.index)) {
+          try {
+            commitWorktreeChanges(worktree.worktreeDir, stage.name);
+            branchesToMerge.push({
+              branchName: worktree.branchName,
+              stageIndex: stage.index,
+              stageName: stage.name,
+            });
+          } catch (error) {
+            emitLogEvent("worktree_cleanup_error", {
+              stage_index: stage.index,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+
+      const keptBranches = new Set(branchesToMerge.map((entry) => entry.branchName));
+      for (const stage of group) {
+        const worktree = worktrees.get(stage.index);
+        if (worktree === undefined) {
+          continue;
+        }
+        try {
+          if (keptBranches.has(worktree.branchName)) {
+            removeWorktreeKeepBranch(flags.project, worktree.worktreeDir);
+          } else {
+            removeWorktree(flags.project, worktree.worktreeDir, worktree.branchName);
+          }
+        } catch (error) {
+          emitLogEvent("worktree_cleanup_error", {
+            stage_index: stage.index,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      branchesToMerge.sort((left, right) => left.stageIndex - right.stageIndex);
+      for (const branch of branchesToMerge) {
+        try {
+          const mergeResult = mergeWorktreeBranch(flags.project, branch.branchName, branch.stageName);
+          emitLogEvent("persist_stage_merge", {
+            stage_index: branch.stageIndex,
+            success: mergeResult.success,
+            had_changes: mergeResult.hadChanges,
+            conflict: mergeResult.conflict,
+          });
+        } catch (error) {
+          emitLogEvent("persist_stage_merge", {
+            stage_index: branch.stageIndex,
+            success: false,
+            had_changes: false,
+            conflict: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          deleteWorktreeBranch(flags.project, branch.branchName);
+        }
+      }
+
       closeAgents(allAgents);
     }
+  }
+
+  protected runParallelGroupSequentialFallback(
+    runDir: RunDir,
+    params: ResolvedRuntimeParams,
+    flags: MainFlags,
+    state: RuntimeState,
+    plan: GoalPlan,
+    group: GoalStage[],
+  ): OrchestrationResult {
+    for (const stage of group) {
+      const result = this.runSequentialStage(
+        runDir,
+        { ...params, autoCommit: params.autoCommit && Boolean(stage.persist_changes) },
+        flags,
+        state,
+        plan,
+        stage,
+      );
+      if (!result.finished) {
+        return result;
+      }
+    }
+
+    return {
+      cyclesCompleted: state.completedCycles,
+      finished: true,
+      message: "Run completed.",
+      summary: group
+        .map((stage) => {
+          const summaryIndex = state.completedStages.lastIndexOf(stage.index);
+          return summaryIndex === -1 ? "" : state.stageSummaries[summaryIndex] ?? "";
+        })
+        .filter((entry) => entry.length > 0)
+        .join(" | "),
+    };
   }
 
   protected runSingleGoal(
@@ -1569,6 +1723,7 @@ abstract class RuntimeOrchestratorBase {
             goalText,
             summary,
             runDir,
+            flags.project,
             cycleIndex,
             verificationState,
             {

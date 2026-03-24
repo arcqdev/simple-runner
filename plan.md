@@ -59,8 +59,7 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 - Parallel stage execution is now present.
   - Stages sharing a `parallel_group` run as a real concurrent stage group.
   - Parallel stage groups execute in isolated per-stage loops and then continue into later sequential stages.
-- Remaining delta:
-  - TypeScript parallel execution still operates in the main repo rather than Python’s git-worktree isolation/merge path.
+  - Parallel stage groups now execute in isolated git worktrees and merge back persisted changes.
 
 ### 5. Verification And Done Semantics
 
@@ -72,12 +71,12 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 6. Git Worktree Isolation
 
-- Worktree-based execution support is not ported.
-  - Missing isolated git worktree creation for parallel stage execution.
-  - Missing stale worktree cleanup.
-  - Missing worktree commit handling.
-  - Missing branch merge-back behavior for persisted work.
-- TypeScript only has simpler repo-level auto-commit behavior.
+- Worktree-based execution support is now present.
+  - Isolated git worktree creation is used for parallel stage execution.
+  - Stale worktree cleanup is implemented.
+  - Worktree commit handling is implemented for persisted stage branches.
+  - Persisted stage branches merge back into the main branch after completion.
+- TypeScript still keeps the simpler repo-level auto-commit behavior for normal sequential execution.
 
 ### 7. Resume Behavior
 
@@ -146,7 +145,7 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
   - Missing summarizer tests.
   - Missing trace-upload tests.
   - Missing browser-level viewer verification coverage.
-  - Missing broader orchestration parity coverage for adaptive, parallel, and worktree flows.
+  - Missing broader orchestration parity coverage for adaptive flows beyond the staged/worktree cases now covered.
 
 ## Not Missing Or Good Enough For Normal Use
 
