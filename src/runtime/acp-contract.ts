@@ -107,6 +107,11 @@ export type AcpUsage = {
   raw?: JsonObject | null;
 };
 
+export type AcpNormalizedEvent = {
+  event: AcpStreamEvent;
+  raw?: JsonObject | null;
+};
+
 export type AcpStreamEvent =
   | {
       type: "session.created";
@@ -202,13 +207,13 @@ export type AcpQueryOutcome =
   | {
       ok: true;
       result: AcpTerminalResult;
-      events: AcpStreamEvent[];
+      events: AcpNormalizedEvent[];
       usage: AcpUsage | null;
     }
   | {
       ok: false;
       error: AcpRuntimeError;
-      events: AcpStreamEvent[];
+      events: AcpNormalizedEvent[];
       usage: AcpUsage | null;
       locator?: AcpConversationLocator;
     };
