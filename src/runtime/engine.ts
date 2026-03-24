@@ -435,6 +435,7 @@ function seedResumeRuntimeState(
     filePath,
     `${JSON.stringify(
       {
+        agentSessionDetails: state.agentSessionDetails,
         agentSessionIds: state.agentSessionIds,
         completedCycles: state.completedCycles,
         completedStages: state.completedStages,

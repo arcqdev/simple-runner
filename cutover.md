@@ -29,6 +29,8 @@ These deviations remain acceptable at cutover and are documented instead of trea
 
 - Trace-upload browser affordances are still lighter than Python even though `kodo issue` now prepares and points to the local archive.
 - Orchestration still uses the documented TS simplifications in [orchestrator-parity-notes.md](/Users/eddie/dev/arcqdev/simple-runner/orchestrator-parity-notes.md), especially sequential handling where Python previously used broader worktree fan-out.
+- Runtime-state resume persistence still stores string session ids rather than full ACP conversation locator objects.
+- The logging/viewer surface still summarizes ACP streams down to the existing terminal-result oriented model even though raw ACP events are preserved where feasible.
 
 ## Long-Tail Behaviors Closed For Cutover
 

@@ -365,6 +365,33 @@ export function parseRun(logFile: string): RunState | null {
           agentStats[agentName] = merged;
         }
       }
+      if (
+        typeof parsed.agentSessionIds === "object" &&
+        parsed.agentSessionIds !== null &&
+        !Array.isArray(parsed.agentSessionIds)
+      ) {
+        for (const [agentName, sessionId] of Object.entries(parsed.agentSessionIds)) {
+          if (typeof sessionId === "string" && sessionId.length > 0) {
+            agentSessionIds[agentName] = sessionId;
+          }
+        }
+      }
+      if (
+        typeof parsed.agentSessionDetails === "object" &&
+        parsed.agentSessionDetails !== null &&
+        !Array.isArray(parsed.agentSessionDetails)
+      ) {
+        for (const [agentName, raw] of Object.entries(parsed.agentSessionDetails)) {
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            continue;
+          }
+          const sessionId = stringField(raw as RunEvent, "sessionId");
+          if (sessionId === null) {
+            continue;
+          }
+          agentSessionDetails[agentName] = sessionInfoFromEvent(raw as RunEvent, sessionId);
+        }
+      }
     }
   } catch {
     pendingExchanges = [];

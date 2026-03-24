@@ -582,4 +582,174 @@ describe("runtime integration", () => {
 
     io.restore();
   });
+
+  it("runs the CLI through the ACP session layer when opencode is selected", () => {
+    const homeDir = makeTempDir("kodo-home");
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const binDir = makeTempDir("kodo-bin");
+    installFakeOpencode(binDir);
+    useOnlyPath(binDir);
+    process.env.KODO_ENABLE_SESSION_RUNTIME = "1";
+
+    const projectDir = makeTempDir("kodo-project");
+    mkdirSync(path.join(projectDir, ".kodo"), { recursive: true });
+    writeFileSync(
+      path.join(projectDir, ".kodo", "team.json"),
+      `${JSON.stringify(
+        {
+          agents: {
+            worker_fast: { backend: "opencode", model: "gemini-2.5-flash", max_turns: 3 },
+          },
+          verifiers: { testers: [], browser_testers: [], reviewers: [] },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    const io = captureOutput();
+
+    expect(
+      runCli([
+        "--goal",
+        "Ship it",
+        "--project",
+        projectDir,
+        "--yes",
+        "--orchestrator",
+        "opencode:gemini-2.5-flash",
+      ]),
+    ).toBe(0);
+
+    const logFile = io.stdout().match(/Log file: (.+)/u)?.[1];
+    expect(logFile).toBeTruthy();
+    const log = logFile ? readFileSync(logFile, "utf8") : "";
+    expect(log).toContain('"event":"session_query_start"');
+    expect(log).toContain('"event":"session_query_end"');
+    expect(log).toContain('"acp_backend":"opencode"');
+    expect(log).toContain('"provider":"gemini"');
+    expect(log).toContain('"session_id":"thread-9"');
+
+    io.restore();
+  });
+
+  it("resumes an interrupted Gemini ACP run through CLI resume semantics", () => {
+    const homeDir = makeTempDir("kodo-home");
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    useOnlyPath(binDir);
+    process.env.KODO_ENABLE_SESSION_RUNTIME = "1";
+
+    const projectDir = makeTempDir("kodo-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    const runId = "gemini_resume";
+    const runRoot = path.join(homeDir, ".kodo", "runs", runId);
+    mkdirSync(runRoot, { recursive: true });
+    writeFileSync(
+      path.join(runRoot, "log.jsonl"),
+      [
+        {
+          event: "run_init",
+          project_dir: projectDir,
+          version: "0.4.261",
+        },
+        {
+          event: "cli_args",
+          goal_text: "Resume Gemini ACP run",
+          max_cycles: 5,
+          max_exchanges: 20,
+          orchestrator: "gemini-cli",
+          orchestrator_model: "gemini-3-flash",
+          project_dir: projectDir,
+          team: "quick",
+        },
+        {
+          event: "run_start",
+          goal: "Resume Gemini ACP run",
+          max_cycles: 5,
+          max_exchanges: 20,
+          model: "gemini-3-flash",
+          orchestrator: "gemini-cli",
+          project_dir: projectDir,
+          resumed: false,
+          team: ["worker_fast"],
+        },
+        {
+          event: "cycle_end",
+          finished: false,
+          summary: "Cycle 1 interrupted before completion",
+        },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n") + "\n",
+      "utf8",
+    );
+    writeFileSync(path.join(runRoot, "goal.md"), "Resume Gemini ACP run\n", "utf8");
+    writeFileSync(
+      path.join(runRoot, "team.json"),
+      `${JSON.stringify(
+        {
+          agents: {
+            worker_fast: { backend: "gemini-cli", model: "gemini-3-flash", max_turns: 3 },
+          },
+          verifiers: { testers: [], browser_testers: [], reviewers: [] },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(runRoot, "config.json"),
+      `${JSON.stringify(
+        {
+          autoCommit: true,
+          maxCycles: 5,
+          maxExchanges: 20,
+          orchestrator: "gemini-cli",
+          orchestratorModel: "gemini-3-flash",
+          team: "quick",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(runRoot, "runtime-state.json"),
+      `${JSON.stringify(
+        {
+          agentSessionIds: {
+            worker_fast: "gemini-session-1",
+          },
+          completedCycles: 1,
+          completedStages: [],
+          currentStageCycles: 0,
+          finished: false,
+          lastSummary: "Cycle 1 interrupted before completion",
+          parallelStageState: {},
+          pendingExchanges: [],
+          stageSummaries: [],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const io = captureOutput();
+    expect(runCli(["--resume", runId, "--project", projectDir, "--yes"])).toBe(0);
+
+    const requests = readFileSync(path.join(projectDir, "gemini-acp-requests.jsonl"), "utf8");
+    expect(requests).toContain('"method":"session.resume"');
+    const resumedLog = readFileSync(path.join(runRoot, "log.jsonl"), "utf8");
+    expect(resumedLog).toContain('"event":"run_resumed"');
+    expect(resumedLog).toContain('"acp_backend":"gemini"');
+    expect(resumedLog).toContain('"session_id":"gemini-session-1"');
+    expect(resumedLog).toContain('"event":"run_end"');
+
+    io.restore();
+  }, 20000);
 });

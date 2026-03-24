@@ -256,4 +256,54 @@ describe("listRuns", () => {
     expect(run?.outputTokens).toBe(7);
     expect(run?.totalAgentCalls).toBe(2);
   });
+
+  it("hydrates saved ACP session metadata from runtime-state.json", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    mkdirSync(project, { recursive: true });
+
+    writeEvents(homeDir, "resume_sessions", "log.jsonl", [
+      {
+        event: "run_start",
+        goal: "resume with acp metadata",
+        orchestrator: "gemini-cli",
+        model: "gemini-3-flash",
+        project_dir: project,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: ["worker_fast"],
+      },
+      { event: "cli_args", team: "full" },
+      { event: "cycle_end", summary: "cycle one" },
+    ]);
+    writeRuntimeState(homeDir, "resume_sessions", {
+      agentSessionDetails: {
+        worker_fast: {
+          acp_backend: "gemini",
+          provider: "gemini",
+          provider_env_vars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+          provider_thread_id: "provider-thread-1",
+          server_session_id: "server-session-1",
+          sessionId: "gemini-session-1",
+        },
+      },
+      agentSessionIds: {
+        worker_fast: "gemini-session-1",
+      },
+    });
+
+    const run = listRuns(project)[0];
+    expect(run?.agentSessionIds).toEqual({ worker_fast: "gemini-session-1" });
+    expect(run?.agentSessionDetails).toEqual({
+      worker_fast: {
+        acpBackend: "gemini",
+        provider: "gemini",
+        providerEnvVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        providerThreadId: "provider-thread-1",
+        serverSessionId: "server-session-1",
+        sessionId: "gemini-session-1",
+      },
+    });
+  });
 });

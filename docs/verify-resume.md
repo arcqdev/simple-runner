@@ -10,6 +10,12 @@ From the repo root:
 npm install
 ```
 
+For a live ACP resume check instead of the mocked path:
+
+- install `gemini` or `opencode` on `PATH`
+- set `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+- run `kodo backends` and confirm the target backend is ACP-ready before creating the interrupted run
+
 ## 1. Create a mock interrupted run
 
 ```bash
@@ -67,6 +73,16 @@ npm run ops:verify-resume
 ```
 
 That script forces the synthetic runtime path and fails if the mock run is not discovered, resumed, or marked complete.
+
+## Live ACP Troubleshooting
+
+If mocked resume passes but a live Gemini/OpenCode resume does not:
+
+- run `kodo backends` and resolve install or credential warnings first
+- inspect the run with `npm run ops:analyze-run -- <run-id>`
+- check `runtime-state.json` inside the run directory to confirm saved cycle state exists
+- check `log.jsonl` for `run_resumed`, `session_query_start`, `session_query_end`, and `run_end`
+- if browser auto-open is getting in the way during repeated checks, set `KODO_NO_VIEWER=1`
 
 ## Cleanup
 
