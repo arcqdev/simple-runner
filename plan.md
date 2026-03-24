@@ -97,32 +97,23 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
   - Archives include those artifacts as part of the normal run payload.
   - Viewer and run parsing can surface the captured conversation paths.
 
-### 10. Summarization
-
-- LLM-backed summarization is not ported.
-  - Missing asynchronous summarizer behavior.
-  - Missing Ollama-backed summarization fallback.
-  - Missing Gemini-backed summarization fallback.
-  - Missing accumulated cycle-summary generation parity.
-
-### 11. Viewer Richness
+### 10. Viewer Richness
 
 - Viewer support exists, but the Python viewer remains richer.
   - Missing parity with the reusable Python HTML viewer app.
   - Missing richer stats presentation driven by Python run accounting.
   - Missing Python-level browser-verified viewer behavior coverage.
 
-### 12. Operational Docs And Support Scripts
+### 11. Operational Docs And Support Scripts
 
 - Supporting operational workflows are thinner than Python.
   - Missing Python-equivalent docs/scripts for resume verification.
   - Missing Python-equivalent docs/scripts for viewer verification.
   - Missing Python’s surrounding support assets for these workflows.
 
-### 13. Test Coverage For Missing Areas
+### 12. Test Coverage For Missing Areas
 
 - The TypeScript repo does not yet have parity-grade test coverage for the missing areas above.
-  - Missing summarizer tests.
   - Missing browser-level viewer verification coverage.
   - Missing broader orchestration parity coverage for adaptive flows beyond the staged/worktree cases now covered.
 
@@ -153,7 +144,6 @@ These areas appear to exist in usable form already, even if the implementation d
 - Git worktree isolation and merge-back
 - Richer resume semantics
 - Trace upload
-- Summarization
 
 ### Strongly Desired
 

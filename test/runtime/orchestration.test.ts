@@ -30,6 +30,7 @@ const ORIGINAL_TRACE_UPLOAD = process.env.KODO_TRACE_UPLOAD;
 const ORIGINAL_TRACE_UPLOAD_TOKEN = process.env.KODO_TRACE_UPLOAD_ACCESS_TOKEN;
 const ORIGINAL_ENABLE_SESSION_RUNTIME = process.env.KODO_ENABLE_SESSION_RUNTIME;
 const ORIGINAL_FAKE_CURL_LOG = process.env.FAKE_CURL_LOG;
+const ORIGINAL_SUMMARIZER_BACKEND = process.env.KODO_SUMMARIZER_BACKEND;
 
 function makeTempDir(prefix: string): string {
   const directory = path.join(
@@ -174,6 +175,12 @@ if (prompt.includes("Current Stage (2/4): Parallel A") || prompt.includes("Curre
 if (prompt.includes("Current Stage (4/4): Final Sequential")) {
   fs.writeFileSync(path.join(projectDir, "final-sequential.txt"), "done\\n", "utf8");
   console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: final sequential finished" }));
+  process.exit(0);
+}
+
+if (prompt.includes("Summarizer fallback goal")) {
+  fs.writeFileSync(path.join(projectDir, "worker-summary.txt"), "done\\n", "utf8");
+  console.log(JSON.stringify({ type: "agent_message", message: "Updated worker-summary.txt\\nAdded coverage for summarizer fallback\\nMore detail follows." }));
   process.exit(0);
 }
 
@@ -427,6 +434,11 @@ afterEach(() => {
   } else {
     process.env.FAKE_CURL_LOG = ORIGINAL_FAKE_CURL_LOG;
   }
+  if (ORIGINAL_SUMMARIZER_BACKEND === undefined) {
+    delete process.env.KODO_SUMMARIZER_BACKEND;
+  } else {
+    process.env.KODO_SUMMARIZER_BACKEND = ORIGINAL_SUMMARIZER_BACKEND;
+  }
 });
 
 describe("runtime orchestration", () => {
@@ -516,6 +528,39 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"orchestrator_retry"');
     expect(log).toContain('"event":"orchestrator_done_accepted"');
   }, 10000);
+
+  it("uses the accumulated summarizer output for end-cycle progress summaries", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+    process.env.KODO_SUMMARIZER_BACKEND = "truncate";
+
+    const projectDir = makeTempDir("summarizer-progress-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_summary_progress"));
+    init(runDir);
+
+    const result = runOrchestration(
+      runDir,
+      { ...buildParams("codex", "gpt-5.4"), maxCycles: 1 },
+      buildGoal("Summarizer fallback goal"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(false);
+    expect(result.summary).toBe("[worker_fast] Updated worker-summary.txt");
+
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"event":"cycle_end"');
+    expect(log).toContain("[worker_fast] Updated worker-summary.txt");
+  });
 
   it("restores a pending single-goal exchange on resume without re-running the worker prompt", () => {
     const binDir = makeTempDir("kodo-bin");

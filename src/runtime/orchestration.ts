@@ -34,6 +34,7 @@ import {
   type Session,
   type SessionQueryResult,
 } from "./sessions.js";
+import { AsyncSummarizer } from "./summarizer.js";
 import { readRunStatus, writeRunStatus } from "./run-status.js";
 
 type VerificationGroups = {
@@ -290,7 +291,9 @@ function loadRuntimeState(runDir: RunDir): RuntimeState {
     return {
       agentSessionIds: parsed.agentSessionIds ?? {},
       agentStats:
-        typeof parsed.agentStats === "object" && parsed.agentStats !== null && !Array.isArray(parsed.agentStats)
+        typeof parsed.agentStats === "object" &&
+        parsed.agentStats !== null &&
+        !Array.isArray(parsed.agentStats)
           ? (parsed.agentStats as Record<string, AgentRunStats>)
           : {},
       completedCycles: parsed.completedCycles ?? 0,
@@ -684,7 +687,10 @@ function composeStageGoal(plan: GoalPlan, stage: GoalStage, completedSummaries: 
 }
 
 function normalizeTerminal(value: string): ParsedDirective["terminal"] | null {
-  const normalized = value.trim().toLowerCase().replace(/[-\s]+/gu, "_");
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/gu, "_");
   if (normalized === "goal_done" || normalized === "done" || normalized === "complete") {
     return "goal_done";
   }
@@ -852,10 +858,7 @@ function buildVerificationPrompt(
 ): string {
   const effortSupplement =
     effort === "high"
-      ? [
-          "",
-          "Effort level is HIGH. Be thorough: verify each criterion with real evidence.",
-        ]
+      ? ["", "Effort level is HIGH. Be thorough: verify each criterion with real evidence."]
       : effort === "max"
         ? [
             "",
@@ -939,10 +942,9 @@ function collectRuntimeAgents(
   state: RuntimeState,
 ): AgentCollection {
   const listing = getTeamByName(params.team, undefined, flags.project);
-  const config =
-    existsSync(runDir.teamFile)
-      ? loadTeamConfigFile(runDir.teamFile)
-      : listing?.config ?? null;
+  const config = existsSync(runDir.teamFile)
+    ? loadTeamConfigFile(runDir.teamFile)
+    : (listing?.config ?? null);
   if (config === null) {
     throw new Error(`Team not found: ${params.team}`);
   }
@@ -1064,7 +1066,10 @@ function verificationPromptLabel(agentName: string): string {
   return agentName.replaceAll("_", " ").replace(/\b\w/gu, (match) => match.toUpperCase());
 }
 
-function fallbackVerifier(workerAgents: RuntimeAgent[], allAgents: RuntimeAgent[]): RuntimeAgent | null {
+function fallbackVerifier(
+  workerAgents: RuntimeAgent[],
+  allAgents: RuntimeAgent[],
+): RuntimeAgent | null {
   return (
     workerAgents.find((agent) => agent.name === "worker_smart") ??
     workerAgents.find((agent) => agent.name === "worker") ??
@@ -1109,12 +1114,7 @@ function runVerification(
 
   verificationState.doneAttempt += 1;
   const resetSession = verificationState.doneAttempt === 1;
-  const prompt = buildVerificationPrompt(
-    goal,
-    summary,
-    options.acceptanceCriteria,
-    options.effort,
-  );
+  const prompt = buildVerificationPrompt(goal, summary, options.acceptanceCriteria, options.effort);
   const agents = [
     ...standardReviewerAgents,
     ...(options.browserTesting ? browserReviewerAgents : []),
@@ -1144,12 +1144,13 @@ function runVerification(
       output_tokens: response.outputTokens,
       response_text: response.text,
       session_queries: agent.session.stats.queries,
-      session_tokens:
-        agent.session.stats.totalInputTokens + agent.session.stats.totalOutputTokens,
+      session_tokens: agent.session.stats.totalInputTokens + agent.session.stats.totalOutputTokens,
       status: response.isError ? "failed" : "completed",
     });
     if (response.isError || !verificationPassed(response.text)) {
-      issues.push(`**${verificationPromptLabel(agent.name)} found issues:**\n${response.text.slice(0, 3000)}`);
+      issues.push(
+        `**${verificationPromptLabel(agent.name)} found issues:**\n${response.text.slice(0, 3000)}`,
+      );
     }
   }
 
@@ -1341,10 +1342,12 @@ function runParallelQueries(payloads: ParallelQueryPayload[]): ParallelQueryResu
 abstract class RuntimeOrchestratorBase {
   readonly kind: string;
   readonly model: string;
+  private readonly summarizer: AsyncSummarizer;
 
   protected constructor(kind: string, model: string) {
     this.kind = kind;
     this.model = model;
+    this.summarizer = new AsyncSummarizer();
   }
 
   run(
@@ -1353,49 +1356,75 @@ abstract class RuntimeOrchestratorBase {
     goal: ResolvedGoal,
     flags: MainFlags,
   ): OrchestrationResult & { artifacts: OrchestrationArtifacts } {
-    const state = loadRuntimeState(runDir);
-    const artifacts = expectedArtifacts(runDir, goal);
-    const plan = loadGoalPlan(runDir);
+    try {
+      const state = loadRuntimeState(runDir);
+      const artifacts = expectedArtifacts(runDir, goal);
+      const plan = loadGoalPlan(runDir);
 
-    emitLogEvent("run_start", {
-      cost_bucket: orchestratorCostBucket(this.kind),
-      goal: goal.goalText,
-      has_stages: plan !== null,
-      max_cycles: params.maxCycles,
-      max_exchanges: params.maxExchanges,
-      model: this.model,
-      num_stages: plan?.stages.length ?? 0,
-      orchestrator: this.kind,
-      project_dir: flags.project,
-      resumed: state.completedCycles > 0 || state.pendingExchanges.length > 0,
-      resume_from_cycle:
-        state.completedCycles > 0 || state.pendingExchanges.length > 0
-          ? state.completedCycles + 1
-          : null,
-    });
+      emitLogEvent("run_start", {
+        cost_bucket: orchestratorCostBucket(this.kind),
+        goal: goal.goalText,
+        has_stages: plan !== null,
+        max_cycles: params.maxCycles,
+        max_exchanges: params.maxExchanges,
+        model: this.model,
+        num_stages: plan?.stages.length ?? 0,
+        orchestrator: this.kind,
+        project_dir: flags.project,
+        resumed: state.completedCycles > 0 || state.pendingExchanges.length > 0,
+        resume_from_cycle:
+          state.completedCycles > 0 || state.pendingExchanges.length > 0
+            ? state.completedCycles + 1
+            : null,
+      });
 
-    const result =
-      plan === null
-        ? (() => {
-            emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
-            emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
-            return this.runSingleGoal(runDir, params, goal.goalText ?? "", flags, state);
-          })()
-        : this.runPlan(runDir, params, goal, flags, state, plan);
+      const result =
+        plan === null
+          ? (() => {
+              emitLogEvent("planning_start", { goal: goal.goalText, mode: goal.source });
+              emitLogEvent("planning_end", { has_plan: false, mode: goal.source });
+              return this.runSingleGoal(runDir, params, goal.goalText ?? "", flags, state);
+            })()
+          : this.runPlan(runDir, params, goal, flags, state, plan);
 
-    emitLogEvent("run_end", {
-      cost_bucket: orchestratorCostBucket(this.kind),
-      finished: result.finished,
-      orchestrator: this.kind,
-      summary: result.summary,
-      total_cycles: result.cyclesCompleted,
-      total_exchanges: result.cyclesCompleted,
-    });
+      emitLogEvent("run_end", {
+        cost_bucket: orchestratorCostBucket(this.kind),
+        finished: result.finished,
+        orchestrator: this.kind,
+        summary: result.summary,
+        total_cycles: result.cyclesCompleted,
+        total_exchanges: result.cyclesCompleted,
+      });
 
-    return {
-      ...result,
-      artifacts,
-    };
+      return {
+        ...result,
+        artifacts,
+      };
+    } finally {
+      this.summarizer.shutdown(true);
+    }
+  }
+
+  protected summarizeWorkerResult(
+    agentName: string,
+    task: string,
+    directive: ParsedDirective,
+    response: SessionQueryResult,
+  ): string {
+    if (!response.isError && response.text.trim().length > 0) {
+      this.summarizer.summarize(agentName, task, response.text);
+    }
+
+    const accumulated = this.summarizer.getAccumulatedSummary();
+    this.summarizer.clear();
+
+    if (directive.explicit) {
+      return cycleSummary(directive.summary || accumulated || response.text);
+    }
+    if (!response.isError && accumulated.length > 0) {
+      return cycleSummary(accumulated);
+    }
+    return cycleSummary(directive.summary || response.text);
   }
 
   protected runPlan(
@@ -1530,12 +1559,8 @@ abstract class RuntimeOrchestratorBase {
     plan: GoalPlan,
     group: GoalStage[],
   ): OrchestrationResult {
-    const { allAgents, browserReviewerAgents, standardReviewerAgents, workerAgents } = collectRuntimeAgents(
-      runDir,
-      params,
-      flags,
-      state,
-    );
+    const { allAgents, browserReviewerAgents, standardReviewerAgents, workerAgents } =
+      collectRuntimeAgents(runDir, params, flags, state);
     if (workerAgents.length === 0) {
       closeAgents(allAgents);
       throw new Error("No runnable workers available for the selected team.");
@@ -1609,7 +1634,10 @@ abstract class RuntimeOrchestratorBase {
       let groupCyclesUsed = 0;
       const verificationState = defaultVerificationState();
 
-      while (groupCyclesUsed < maxParallelCycles && stageRuntimes.some((stage) => !stage.finished)) {
+      while (
+        groupCyclesUsed < maxParallelCycles &&
+        stageRuntimes.some((stage) => !stage.finished)
+      ) {
         const activeStages = stageRuntimes.filter((stage) => !stage.finished);
         const parallelResults = runParallelQueries(
           activeStages.map((stage) => ({
@@ -1694,7 +1722,12 @@ abstract class RuntimeOrchestratorBase {
               stageRuntime.worker.session.stats.totalOutputTokens,
             status: queryResult.isError ? "failed" : "completed",
           });
-          updateAgentStats(state, stageRuntime.worker.name, queryResult, stageRuntime.worker.session);
+          updateAgentStats(
+            state,
+            stageRuntime.worker.name,
+            queryResult,
+            stageRuntime.worker.session,
+          );
 
           if (outcome.directive.terminal === "goal_done" && !queryResult.isError) {
             const verificationIssues = runVerification(
@@ -1810,7 +1843,8 @@ abstract class RuntimeOrchestratorBase {
           .filter((stageRuntime) => stageRuntime.persistReady)
           .map((stageRuntime) => stageRuntime.stage.index),
       );
-      const branchesToMerge: Array<{ branchName: string; stageIndex: number; stageName: string }> = [];
+      const branchesToMerge: Array<{ branchName: string; stageIndex: number; stageName: string }> =
+        [];
 
       for (const stage of group) {
         const worktree = worktrees.get(stage.index);
@@ -1857,7 +1891,11 @@ abstract class RuntimeOrchestratorBase {
       branchesToMerge.sort((left, right) => left.stageIndex - right.stageIndex);
       for (const branch of branchesToMerge) {
         try {
-          const mergeResult = mergeWorktreeBranch(flags.project, branch.branchName, branch.stageName);
+          const mergeResult = mergeWorktreeBranch(
+            flags.project,
+            branch.branchName,
+            branch.stageName,
+          );
           emitLogEvent("persist_stage_merge", {
             stage_index: branch.stageIndex,
             success: mergeResult.success,
@@ -1910,7 +1948,7 @@ abstract class RuntimeOrchestratorBase {
       summary: group
         .map((stage) => {
           const summaryIndex = state.completedStages.lastIndexOf(stage.index);
-          return summaryIndex === -1 ? "" : state.stageSummaries[summaryIndex] ?? "";
+          return summaryIndex === -1 ? "" : (state.stageSummaries[summaryIndex] ?? "");
         })
         .filter((entry) => entry.length > 0)
         .join(" | "),
@@ -1928,12 +1966,8 @@ abstract class RuntimeOrchestratorBase {
     browserTesting?: boolean,
     verificationMode?: VerificationMode,
   ): OrchestrationResult {
-    const { allAgents, browserReviewerAgents, standardReviewerAgents, workerAgents } = collectRuntimeAgents(
-      runDir,
-      params,
-      flags,
-      state,
-    );
+    const { allAgents, browserReviewerAgents, standardReviewerAgents, workerAgents } =
+      collectRuntimeAgents(runDir, params, flags, state);
     if (workerAgents.length === 0) {
       closeAgents(allAgents);
       throw new Error("No runnable workers available for the selected team.");
@@ -1963,7 +1997,7 @@ abstract class RuntimeOrchestratorBase {
         const restoredPending = pendingExchangeForSingle(state, cycleIndex, goalText);
         const outcome =
           restoredPending !== null
-            ? pendingExchangeOutcome(restoredPending) ??
+            ? (pendingExchangeOutcome(restoredPending) ??
               this.runWorkerCycle(
                 runDir,
                 goalText,
@@ -1976,7 +2010,7 @@ abstract class RuntimeOrchestratorBase {
                 acceptCriteria,
                 browserTesting,
                 verificationMode,
-              )
+              ))
             : this.runWorkerCycle(
                 runDir,
                 goalText,
@@ -2070,7 +2104,8 @@ abstract class RuntimeOrchestratorBase {
           return {
             cyclesCompleted: state.completedCycles,
             finished: true,
-            message: outcome.directive.terminal === "raise_issue" ? "Run failed." : "Run completed.",
+            message:
+              outcome.directive.terminal === "raise_issue" ? "Run failed." : "Run completed.",
             summary,
           };
         }
@@ -2125,6 +2160,12 @@ abstract class RuntimeOrchestratorBase {
     });
 
     const outcome = this.queryWorker(worker, prompt, projectDir, cycleIndex, maxExchanges);
+    outcome.summary = this.summarizeWorkerResult(
+      worker.name,
+      goalText,
+      outcome.directive,
+      outcome.response,
+    );
     persistPendingExchange(runDir, state, {
       acceptanceCriteria,
       agentName: worker.name,
