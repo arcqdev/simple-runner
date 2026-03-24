@@ -4,18 +4,36 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
+import { ACP_PROTOCOL_VERSION, ACP_BACKEND_PROFILES } from "./acp-contract.js";
 import { classifySessionError } from "./sessions.js";
+import { ACP_GEMINI_ENV_VARS, defaultModelForBackend } from "../config/models.js";
 
-// These backend keys describe the current executable/preflight layer. ACP
-// rollout work should keep user-facing backend labels stable while mapping them
-// onto the backend profiles defined in src/runtime/acp-contract.ts.
-export type BackendKey = "claude" | "codex" | "cursor" | "gemini-cli" | "kimi";
-export type TeamBackend = "claude" | "claude-cli" | "cursor" | "codex" | "gemini-cli";
+export type BackendKey = "claude" | "codex" | "cursor" | "gemini-cli" | "opencode" | "kimi";
+export type TeamBackend = "claude" | "claude-cli" | "cursor" | "codex" | "gemini-cli" | "opencode";
 
 export type BackendAvailability = Record<BackendKey, boolean>;
 export type BackendStatus = {
   version: string;
   warning: string | null;
+};
+
+type BackendProfile = {
+  defaultModel: string;
+  envVars: readonly string[];
+  installLink: string;
+  key: BackendKey;
+  legacyAliases?: readonly TeamBackend[];
+  preflight:
+    | {
+        command: string;
+        kind: "cli";
+        versionArgs: readonly string[];
+      }
+    | {
+        acpBackend: keyof typeof ACP_BACKEND_PROFILES;
+        kind: "acp";
+      };
+  teamBackends: readonly TeamBackend[];
 };
 
 export const API_KEY_ENV_VARS = [
@@ -29,24 +47,97 @@ export const API_KEY_ENV_VARS = [
   "XAI_API_KEY",
 ] as const;
 
-const EXECUTABLES: Record<BackendKey, string> = {
-  claude: "claude",
-  codex: "codex",
-  cursor: "cursor-agent",
-  "gemini-cli": "gemini",
-  kimi: "kimi",
+const ACP_READY_TIMEOUT_MS = 15_000;
+
+const BACKEND_PROFILES: Record<BackendKey, BackendProfile> = {
+  claude: {
+    defaultModel: defaultModelForBackend("claude"),
+    envVars: ["ANTHROPIC_API_KEY"],
+    installLink: "https://docs.anthropic.com/en/docs/claude-code",
+    key: "claude",
+    legacyAliases: ["claude-cli"],
+    preflight: {
+      command: "claude",
+      kind: "cli",
+      versionArgs: ["--version"],
+    },
+    teamBackends: ["claude", "claude-cli"],
+  },
+  codex: {
+    defaultModel: defaultModelForBackend("codex"),
+    envVars: ["OPENAI_API_KEY"],
+    installLink: "https://github.com/openai/codex",
+    key: "codex",
+    preflight: {
+      command: "codex",
+      kind: "cli",
+      versionArgs: ["--version"],
+    },
+    teamBackends: ["codex"],
+  },
+  cursor: {
+    defaultModel: defaultModelForBackend("cursor"),
+    envVars: [],
+    installLink: "https://docs.cursor.com/agent",
+    key: "cursor",
+    preflight: {
+      command: "cursor-agent",
+      kind: "cli",
+      versionArgs: ["--version"],
+    },
+    teamBackends: ["cursor"],
+  },
+  "gemini-cli": {
+    defaultModel: defaultModelForBackend("gemini-cli"),
+    envVars: ACP_GEMINI_ENV_VARS,
+    installLink: "https://github.com/google-gemini/gemini-cli",
+    key: "gemini-cli",
+    preflight: {
+      acpBackend: "gemini",
+      kind: "acp",
+    },
+    teamBackends: ["gemini-cli"],
+  },
+  opencode: {
+    defaultModel: defaultModelForBackend("opencode"),
+    envVars: ACP_GEMINI_ENV_VARS,
+    installLink: "https://opencode.ai",
+    key: "opencode",
+    preflight: {
+      acpBackend: "opencode",
+      kind: "acp",
+    },
+    teamBackends: ["opencode"],
+  },
+  kimi: {
+    defaultModel: defaultModelForBackend("kimi"),
+    envVars: [],
+    installLink: "https://platform.moonshot.cn",
+    key: "kimi",
+    preflight: {
+      command: "kimi",
+      kind: "cli",
+      versionArgs: ["--version"],
+    },
+    teamBackends: [],
+  },
 };
 
-const SMART_MODELS: Record<BackendKey, string> = {
-  claude: "opus",
-  codex: "gpt-5.4",
-  cursor: "composer-1.5",
-  "gemini-cli": "gemini-3-flash",
-  kimi: "kimi-k2.5",
+const TEAM_BACKEND_TARGETS: Record<TeamBackend, BackendKey> = {
+  claude: "claude",
+  "claude-cli": "claude",
+  codex: "codex",
+  cursor: "cursor",
+  "gemini-cli": "gemini-cli",
+  opencode: "opencode",
 };
 
 export function isBackendKey(value: string): value is BackendKey {
-  return value in EXECUTABLES;
+  return value in BACKEND_PROFILES;
+}
+
+export function isTeamBackend(value: string): value is TeamBackend {
+  return value in TEAM_BACKEND_TARGETS;
 }
 
 function isExecutable(filePath: string): boolean {
@@ -54,7 +145,22 @@ function isExecutable(filePath: string): boolean {
 }
 
 export function executableForBackend(backend: BackendKey): string {
-  return EXECUTABLES[backend];
+  const preflight = BACKEND_PROFILES[backend].preflight;
+  return preflight.kind === "acp"
+    ? ACP_BACKEND_PROFILES[preflight.acpBackend].transport.command
+    : preflight.command;
+}
+
+export function installLinkForBackend(backend: BackendKey): string {
+  return BACKEND_PROFILES[backend].installLink;
+}
+
+export function teamBackendAvailabilityKey(backend: TeamBackend): BackendKey {
+  return TEAM_BACKEND_TARGETS[backend];
+}
+
+export function availableTeamBackends(): TeamBackend[] {
+  return Object.keys(TEAM_BACKEND_TARGETS) as TeamBackend[];
 }
 
 export function commandOnPath(command: string): boolean {
@@ -79,26 +185,42 @@ export function commandOnPath(command: string): boolean {
 
 export function availableBackends(): BackendAvailability {
   return {
-    claude: commandOnPath(EXECUTABLES.claude),
-    codex: commandOnPath(EXECUTABLES.codex),
-    cursor: commandOnPath(EXECUTABLES.cursor),
-    "gemini-cli": commandOnPath(EXECUTABLES["gemini-cli"]),
-    kimi: commandOnPath(EXECUTABLES.kimi),
+    claude: commandOnPath(executableForBackend("claude")),
+    codex: commandOnPath(executableForBackend("codex")),
+    cursor: commandOnPath(executableForBackend("cursor")),
+    "gemini-cli": commandOnPath(executableForBackend("gemini-cli")),
+    opencode: commandOnPath(executableForBackend("opencode")),
+    kimi: commandOnPath(executableForBackend("kimi")),
   };
 }
 
 export function smartModelForBackend(backend: BackendKey): string {
-  return SMART_MODELS[backend];
+  return BACKEND_PROFILES[backend].defaultModel;
 }
 
-export function checkBackendStatus(backend: BackendKey): BackendStatus {
-  const command = executableForBackend(backend);
+function hasRequiredEnvVar(envVars: readonly string[], env: NodeJS.ProcessEnv): boolean {
+  return envVars.some((name) => {
+    const value = env[name];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function envHint(envVars: readonly string[]): string | null {
+  return envVars.length === 0 ? null : `Set one of: ${envVars.join(", ")}`;
+}
+
+function checkCliBackendStatus(backend: BackendKey): BackendStatus {
+  const profile = BACKEND_PROFILES[backend];
+  const preflight = profile.preflight;
+  if (preflight.kind !== "cli") {
+    return { version: "error", warning: "invalid CLI preflight profile" };
+  }
 
   try {
-    const result = spawnSync(command, ["--version"], {
+    const result = spawnSync(preflight.command, [...preflight.versionArgs], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 15000,
+      timeout: ACP_READY_TIMEOUT_MS,
     });
 
     const stdout = result.stdout ?? "";
@@ -149,19 +271,145 @@ export function checkBackendStatus(backend: BackendKey): BackendStatus {
   }
 }
 
+function checkAcpBackendStatus(backend: BackendKey): BackendStatus {
+  const profile = BACKEND_PROFILES[backend];
+  const preflight = profile.preflight;
+  if (preflight.kind !== "acp") {
+    return { version: "error", warning: "invalid ACP preflight profile" };
+  }
+
+  const acpProfile = ACP_BACKEND_PROFILES[preflight.acpBackend];
+  const initializePayload = {
+    id: 1,
+    jsonrpc: "2.0",
+    method: "initialize",
+    params: {
+      clientName: "kodo-preflight",
+      clientVersion: "0",
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      requestedCapabilities: {
+        initialize: true,
+        prompt: true,
+        resume: true,
+        sessionLifecycle: true,
+        streaming: true,
+        usage: true,
+      },
+    },
+  };
+  const shutdownPayload = {
+    id: 2,
+    jsonrpc: "2.0",
+    method: "shutdown",
+    params: {},
+  };
+
+  try {
+    const result = spawnSync(acpProfile.transport.command, acpProfile.transport.args, {
+      encoding: "utf8",
+      input: `${JSON.stringify(initializePayload)}\n${JSON.stringify(shutdownPayload)}\n`,
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: ACP_READY_TIMEOUT_MS,
+    });
+
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      return { version: "timeout", warning: "ACP initialize timed out (15 s)" };
+    }
+
+    const stdout = result.stdout ?? "";
+    const stderr = result.stderr ?? "";
+    const lines = stdout
+      .split(/\r?\n/gu)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    const responses = lines.flatMap((line) => {
+      try {
+        return [JSON.parse(line) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
+    const initResponse = responses.find((entry) => entry.id === 1);
+    const initResult =
+      typeof initResponse?.result === "object" && initResponse.result !== null
+        ? (initResponse.result as Record<string, unknown>)
+        : null;
+    const capabilities =
+      typeof initResult?.capabilities === "object" && initResult.capabilities !== null
+        ? (initResult.capabilities as Record<string, unknown>)
+        : null;
+    const serverName =
+      typeof capabilities?.serverName === "string" && capabilities.serverName.length > 0
+        ? capabilities.serverName
+        : acpProfile.transport.command;
+    const serverVersion =
+      typeof capabilities?.serverVersion === "string" && capabilities.serverVersion.length > 0
+        ? capabilities.serverVersion
+        : null;
+    const version =
+      serverVersion === null ? `${serverName} (ACP ready)` : `${serverName} ${serverVersion}`;
+
+    if (initResult === null || capabilities === null) {
+      const snippet = [stderr.trim(), stdout.trim()].filter((part) => part.length > 0).join("\n");
+      return {
+        version: "error",
+        warning:
+          snippet.length > 0
+            ? `ACP initialize failed: ${snippet.slice(0, 200)}`
+            : "ACP initialize failed: malformed response from server.",
+      };
+    }
+
+    const envWarning = hasRequiredEnvVar(profile.envVars, process.env)
+      ? null
+      : `${backend}: ACP transport is reachable, but credentials are missing. ${envHint(profile.envVars)}`;
+
+    if (result.status !== 0) {
+      const snippet = [stderr.trim(), stdout.trim()].filter((part) => part.length > 0).join("\n");
+      return {
+        version,
+        warning:
+          snippet.length > 0
+            ? `ACP transport exited early: ${snippet.slice(0, 200)}`
+            : `ACP transport exited with code ${result.status ?? -1}`,
+      };
+    }
+
+    return {
+      version,
+      warning: envWarning,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { version: "error", warning: `ACP preflight failed: ${message}` };
+  }
+}
+
+export function checkBackendStatus(backend: BackendKey): BackendStatus {
+  return BACKEND_PROFILES[backend].preflight.kind === "acp"
+    ? checkAcpBackendStatus(backend)
+    : checkCliBackendStatus(backend);
+}
+
 export function preflightWarningsForBackends(backends: string[]): string[] {
   const warnings: string[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<BackendKey>();
+  const installed = availableBackends();
 
   for (const backend of backends) {
-    const normalized = backend === "claude-cli" ? "claude" : backend;
-    if (!isBackendKey(normalized) || seen.has(normalized)) {
+    if (!isTeamBackend(backend)) {
+      continue;
+    }
+    const normalized = teamBackendAvailabilityKey(backend);
+    if (seen.has(normalized)) {
       continue;
     }
     seen.add(normalized);
 
-    if (!availableBackends()[normalized]) {
-      warnings.push(`  ${backend}: binary not found on PATH`);
+    if (!installed[normalized]) {
+      warnings.push(
+        `  ${backend}: backend unavailable. Install ${normalized} from ${installLinkForBackend(normalized)}`,
+      );
       continue;
     }
 

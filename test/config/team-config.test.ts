@@ -22,6 +22,7 @@ describe("buildRuntimeTeamConfig", () => {
         codex: true,
         cursor: false,
         "gemini-cli": false,
+        opencode: false,
         kimi: false,
       },
     );
@@ -54,5 +55,31 @@ describe("buildRuntimeTeamConfig", () => {
         "memory:team.json",
       ),
     ).toThrowError("unknown backend");
+  });
+
+  it("accepts opencode teams and injects the ACP-backed default model", () => {
+    const result = buildRuntimeTeamConfig(
+      {
+        agents: {
+          worker_fast: {
+            backend: "opencode",
+          },
+        },
+      },
+      "memory:team.json",
+      {
+        claude: false,
+        codex: false,
+        cursor: false,
+        "gemini-cli": false,
+        opencode: true,
+        kimi: false,
+      },
+    );
+
+    expect(result.config.agents.worker_fast).toMatchObject({
+      backend: "opencode",
+      model: "gemini-2.5-flash",
+    });
   });
 });

@@ -3,6 +3,16 @@ import process from "node:process";
 
 export const OLLAMA_LOCAL = "ollama-local";
 export const OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1";
+export const ACP_GEMINI_ENV_VARS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
+
+export type RuntimeModelBackend =
+  | "claude"
+  | "claude-cli"
+  | "codex"
+  | "cursor"
+  | "gemini-cli"
+  | "opencode"
+  | "kimi";
 
 type ModelInfo = {
   alias: string;
@@ -123,6 +133,40 @@ const PROVIDER_REGISTRY: readonly Provider[] = [
   },
 ] as const;
 
+const RUNTIME_MODEL_CATALOG: Record<
+  RuntimeModelBackend,
+  { defaultModel: string; suggestions: string[] }
+> = {
+  claude: {
+    defaultModel: "opus",
+    suggestions: ["opus", "sonnet", "haiku"],
+  },
+  "claude-cli": {
+    defaultModel: "opus",
+    suggestions: ["opus", "sonnet", "haiku"],
+  },
+  codex: {
+    defaultModel: "gpt-5.4",
+    suggestions: ["gpt-5.4", "gpt-5.3-codex", "o3"],
+  },
+  cursor: {
+    defaultModel: "composer-1.5",
+    suggestions: ["composer-1.5", "sonnet-4-thinking", "gpt-5"],
+  },
+  "gemini-cli": {
+    defaultModel: "gemini-3-flash",
+    suggestions: ["gemini-3-flash", "gemini-3-pro", "gemini-2.5-flash"],
+  },
+  opencode: {
+    defaultModel: "gemini-2.5-flash",
+    suggestions: ["gemini-2.5-flash", "gemini-3-flash", "gemini-3-pro"],
+  },
+  kimi: {
+    defaultModel: "kimi-k2.5",
+    suggestions: ["kimi-k2.5"],
+  },
+};
+
 const CLI_ORCHESTRATORS = new Set(["claude-code", "gemini-cli", "codex", "cursor", "kimi-code"]);
 
 function hasEnvVar(name: string, env: NodeJS.ProcessEnv): boolean {
@@ -157,6 +201,16 @@ export function availableModelChoices(env = process.env): Array<[string, string,
   return availableProviders(env).flatMap((provider) =>
     provider.models.map((model) => [model.alias, model.displayName, provider.name] as const),
   );
+}
+
+export function defaultModelForBackend(
+  backend: RuntimeModelBackend,
+): (typeof RUNTIME_MODEL_CATALOG)[RuntimeModelBackend]["defaultModel"] {
+  return RUNTIME_MODEL_CATALOG[backend].defaultModel;
+}
+
+export function suggestedModelsForBackend(backend: RuntimeModelBackend): string[] {
+  return [...RUNTIME_MODEL_CATALOG[backend].suggestions];
 }
 
 export function isOllamaModel(model: string | null | undefined): boolean {

@@ -6,10 +6,11 @@ import fullTeam from "../defaults/team-full.json";
 import quickTeam from "../defaults/team-quick.json";
 import testTeam from "../defaults/team-test.json";
 import {
-  type BackendKey,
   availableBackends,
-  isBackendKey,
+  availableTeamBackends,
+  isTeamBackend,
   smartModelForBackend,
+  teamBackendAvailabilityKey,
   type TeamBackend,
 } from "../runtime/backends.js";
 
@@ -48,12 +49,16 @@ export type BuiltRuntimeTeam = {
   warnings: string[];
 };
 
-export const TEAM_BACKEND_MAP: Record<TeamBackend, BackendKey | ""> = {
+export const TEAM_BACKEND_MAP: Record<
+  TeamBackend,
+  ReturnType<typeof teamBackendAvailabilityKey>
+> = {
   claude: "claude",
   "claude-cli": "claude",
   codex: "codex",
   cursor: "cursor",
   "gemini-cli": "gemini-cli",
+  opencode: "opencode",
 };
 
 const BUILTIN_TEAMS: Record<string, TeamConfig> = {
@@ -152,9 +157,10 @@ function normalizedAgentConfig(
   if (typeof typed.backend !== "string" || typed.backend.length === 0) {
     throw new Error(`Agent '${agentKey}' must have a 'backend' field in ${sourcePath}`);
   }
-  if (!(typed.backend in TEAM_BACKEND_MAP)) {
+  if (!isTeamBackend(typed.backend)) {
+    const requestedBackend = String(typed.backend);
     throw new Error(
-      `Agent '${agentKey}' has unknown backend '${typed.backend}' in ${sourcePath}. Valid backends: ${Object.keys(TEAM_BACKEND_MAP).join(", ")}`,
+      `Agent '${agentKey}' has unknown backend '${requestedBackend}' in ${sourcePath}. Valid backends: ${availableTeamBackends().join(", ")}`,
     );
   }
 
@@ -162,9 +168,7 @@ function normalizedAgentConfig(
   const model =
     typeof typed.model === "string" && typed.model.trim().length > 0
       ? typed.model.trim()
-      : backendKey !== "" && isBackendKey(backendKey)
-        ? smartModelForBackend(backendKey)
-        : undefined;
+      : smartModelForBackend(backendKey);
 
   return {
     backend: typed.backend as TeamBackend,
@@ -197,7 +201,7 @@ export function buildRuntimeTeamConfig(
   for (const [agentKey, agentConfig] of Object.entries(config.agents)) {
     const normalized = normalizedAgentConfig(agentKey, agentConfig, sourcePath);
     const backendKey = TEAM_BACKEND_MAP[normalized.backend];
-    if (backendKey !== "" && isBackendKey(backendKey) && !backends[backendKey]) {
+    if (!backends[backendKey]) {
       skipped.push({ agent: agentKey, backend: normalized.backend });
       warnings.push(`Skipping agent '${agentKey}': backend '${normalized.backend}' is unavailable`);
       continue;
@@ -207,7 +211,7 @@ export function buildRuntimeTeamConfig(
 
   if (Object.keys(agents).length === 0) {
     throw new Error(
-      "No agents available after checking backends. Install at least one of: claude, cursor, codex, or gemini-cli.",
+      "No agents available after checking backends. Install at least one of: claude, cursor, codex, gemini-cli, or opencode.",
     );
   }
 
@@ -312,12 +316,8 @@ export function describeTeamStatus(config: TeamConfig): { hasMissing: boolean; l
   for (const [agentKey, agentConfig] of Object.entries(config.agents)) {
     const backend = agentConfig.backend ?? "?";
     const backendKey = TEAM_BACKEND_MAP[backend as TeamBackend];
-    const model =
-      agentConfig.model ??
-      (backendKey && isBackendKey(backendKey)
-        ? `default (${smartModelForBackend(backendKey)})`
-        : "default");
-    const ok = backendKey !== "" && isBackendKey(backendKey) ? backends[backendKey] : false;
+    const model = agentConfig.model ?? `default (${smartModelForBackend(backendKey)})`;
+    const ok = backends[backendKey];
     if (!ok) {
       hasMissing = true;
     }
@@ -346,7 +346,7 @@ export function generateAutoTeam(
   const backends = availableBackends();
   if (!Object.values(backends).some(Boolean)) {
     throw new Error(
-      "No backends available. Install at least one of:\n  claude, cursor, codex, gemini-cli\nRun 'kodo backends' for install links.",
+      "No backends available. Install at least one of:\n  claude, cursor, codex, gemini-cli, opencode\nRun 'kodo backends' for install links.",
     );
   }
 
@@ -356,7 +356,7 @@ export function generateAutoTeam(
 
   for (const [agentKey, agentConfig] of Object.entries(sourceAgents)) {
     const backendKey = TEAM_BACKEND_MAP[agentConfig.backend];
-    if (backendKey && isBackendKey(backendKey) && backends[backendKey]) {
+    if (backends[backendKey]) {
       agents[agentKey] = deepClone(agentConfig);
     } else {
       skipped.push({ agent: agentKey, backend: agentConfig.backend });
@@ -367,18 +367,20 @@ export function generateAutoTeam(
     ["cursor", "composer-1.5"],
     ["codex", "gpt-5.4"],
     ["gemini-cli", "gemini-2.5-flash"],
+    ["opencode", "gemini-2.5-flash"],
     ["claude", "sonnet"],
   ];
   const smartFallbacks: Array<[TeamBackend, string]> = [
     ["claude", "opus"],
     ["gemini-cli", "gemini-3-pro"],
+    ["opencode", "gemini-3-flash"],
     ["cursor", "composer-1.5"],
   ];
 
   const findFallback = (candidates: Array<[TeamBackend, string]>): [TeamBackend, string] | null =>
     candidates.find(([backend]) => {
       const backendKey = TEAM_BACKEND_MAP[backend];
-      return backendKey !== "" && backends[backendKey];
+      return backends[backendKey];
     }) ?? null;
 
   const maybeFillRole = (role: string, fallbacks: Array<[TeamBackend, string]>): void => {

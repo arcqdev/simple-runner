@@ -1,5 +1,4 @@
 import type { JsonObject } from "./json.js";
-import type { TeamBackend } from "../runtime/backends.js";
 
 /**
  * Stable ACP-facing runtime contract for the staged migration away from
@@ -63,7 +62,7 @@ export type AcpBackendProfile = {
   provider: AcpProviderKind;
   defaultModel: string;
   envVars: string[];
-  teamBackends: TeamBackend[];
+  teamBackends: string[];
   supportsResume: boolean;
   transport: AcpTransportConfig;
   notes?: string[];
@@ -246,7 +245,7 @@ export const ACP_BACKEND_PROFILES: Record<AcpBackendKind, AcpBackendProfile> = {
     provider: "gemini",
     defaultModel: "gemini-2.5-flash",
     envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-    teamBackends: [],
+    teamBackends: ["opencode"],
     supportsResume: true,
     transport: {
       kind: "stdio",

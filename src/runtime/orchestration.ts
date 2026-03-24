@@ -917,7 +917,7 @@ function workerNames(config: TeamConfig, groups: VerificationGroups): string[] {
 
 function sessionBackendAvailable(backend: TeamAgentConfig["backend"]): boolean {
   const key = TEAM_BACKEND_MAP[backend];
-  return key !== "" && availableBackends()[key];
+  return availableBackends()[key];
 }
 
 function makeRuntimeAgent(

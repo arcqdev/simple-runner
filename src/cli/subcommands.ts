@@ -17,9 +17,16 @@ import {
   type TeamBackend,
   type TeamConfig,
 } from "../config/team-config.js";
+import { suggestedModelsForBackend } from "../config/models.js";
 import { CliError } from "../core/errors.js";
 import { packRunArchive } from "../logging/archive.js";
-import { API_KEY_ENV_VARS, availableBackends, checkBackendStatus } from "../runtime/backends.js";
+import {
+  API_KEY_ENV_VARS,
+  availableBackends,
+  availableTeamBackends,
+  checkBackendStatus,
+  installLinkForBackend,
+} from "../runtime/backends.js";
 import { getRunById, listRuns, truncateWord, type RunState } from "../logging/runs.js";
 import { VERSION } from "../core/version.js";
 import { openViewer } from "../viewer.js";
@@ -262,7 +269,7 @@ function listTeams(homeDir = os.homedir()): void {
 
 function selectBackend(defaultValue?: TeamBackend): TeamBackend | null {
   const prompt = getPromptAdapter();
-  const choices: TeamBackend[] = ["claude", "claude-cli", "cursor", "codex", "gemini-cli"];
+  const choices = availableTeamBackends();
   const value = prompt.select("Backend", choices, defaultValue ?? choices[0]);
   if (value === null) {
     return null;
@@ -295,17 +302,9 @@ function promptAgentFields(defaults?: TeamAgentConfig): TeamAgentConfig | null {
     return null;
   }
 
-  const modelSuggestions: Record<TeamBackend, string[]> = {
-    claude: ["sonnet", "opus"],
-    "claude-cli": ["sonnet", "opus"],
-    codex: ["gpt-5.4", "gpt-5.3-codex", "o3"],
-    cursor: ["composer-1.5"],
-    "gemini-cli": ["gemini-2.5-flash", "gemini-3-flash", "gemini-3-pro"],
-  };
-
   const modelChoice = prompt.select(
     "Model",
-    [...modelSuggestions[backend], "(custom)"],
+    [...suggestedModelsForBackend(backend), "(custom)"],
     defaults?.model,
   );
   if (modelChoice === null) {
@@ -734,13 +733,6 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
 
 function listBackendsSubcommand(): void {
   const backends = availableBackends();
-  const installLinks: Record<string, string> = {
-    claude: "https://docs.anthropic.com/en/docs/claude-code",
-    codex: "https://github.com/openai/codex",
-    cursor: "https://docs.cursor.com/agent",
-    "gemini-cli": "https://github.com/google-gemini/gemini-cli",
-    kimi: "https://platform.moonshot.cn",
-  };
   const apiProviders = [
     { name: "Anthropic", envVars: ["ANTHROPIC_API_KEY"] },
     { name: "OpenAI", envVars: ["OPENAI_API_KEY"] },
@@ -754,7 +746,9 @@ function listBackendsSubcommand(): void {
 
   for (const [name, installed] of Object.entries(backends)) {
     if (!installed) {
-      lines.push(`  ${name.padEnd(12)} not found  ${installLinks[name] ?? ""}`.trimEnd());
+      lines.push(
+        `  ${name.padEnd(12)} not found  ${installLinkForBackend(name as keyof typeof backends)}`.trimEnd(),
+      );
       continue;
     }
     const status = checkBackendStatus(name as keyof typeof backends);

@@ -12,7 +12,13 @@ import type { JsonObject } from "./json.js";
 // transport/session semantics and treat the types in this file as the
 // compatibility layer that must eventually be implemented on top of ACP.
 export type SessionBackend = "claude-cli" | "codex" | "cursor" | "gemini-cli";
-export type TeamSessionBackend = "claude" | "claude-cli" | "codex" | "cursor" | "gemini-cli";
+export type TeamSessionBackend =
+  | "claude"
+  | "claude-cli"
+  | "codex"
+  | "cursor"
+  | "gemini-cli"
+  | "opencode";
 
 export type SessionQueryResult = {
   conversationLog?: string | null;
@@ -40,6 +46,7 @@ export type SessionQueryOptions = {
 };
 
 export type SessionOptions = {
+  acpBackend?: "gemini" | "opencode";
   resumeSessionId?: string | null;
   systemPrompt?: string | null;
   timeoutS?: number;
@@ -201,10 +208,6 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
-function signalLabel(signal: NodeJS.Signals | null): string | null {
-  return signal === null ? null : signal;
-}
-
 function isTimeoutError(error: Error | null): boolean {
   const candidate = error as NodeJS.ErrnoException | null;
   return candidate?.code === "ETIMEDOUT";
@@ -248,6 +251,7 @@ function queryHelperPath(): string {
 }
 
 function runQueryHelper(payload: {
+  acpBackend?: "gemini" | "opencode";
   backend: SessionBackend;
   maxTurns: number;
   model: string;
@@ -304,7 +308,10 @@ function runQueryHelper(payload: {
       inputTokens: null,
       isError: true,
       outputTokens: null,
-      text: helper.stderr.trim() || stdout || `${payload.backend}: session helper returned malformed JSON`,
+      text:
+        helper.stderr.trim() ||
+        stdout ||
+        `${payload.backend}: session helper returned malformed JSON`,
       usageRaw: null,
     };
   }
@@ -678,6 +685,7 @@ class SubprocessSession implements Session {
   readonly #definition: AdapterDefinition;
   readonly #timeoutS: number;
   readonly #systemPrompt: string | null;
+  readonly #acpBackend: "gemini" | "opencode" | null;
   #sessionId: string | null;
   #stats = emptyStats();
   #systemPromptSent = false;
@@ -687,6 +695,7 @@ class SubprocessSession implements Session {
     this.costBucket = ADAPTERS[backend].costBucket;
     this.model = model;
     this.#definition = ADAPTERS[backend];
+    this.#acpBackend = options.acpBackend ?? null;
     this.#sessionId = options.resumeSessionId ?? null;
     this.#systemPrompt = options.systemPrompt ?? null;
     this.#timeoutS = options.timeoutS ?? DEFAULT_TIMEOUT_S;
@@ -702,6 +711,7 @@ class SubprocessSession implements Session {
 
   clone(): Session {
     return new SubprocessSession(this.backend, this.model, {
+      acpBackend: this.#acpBackend ?? undefined,
       systemPrompt: this.#systemPrompt,
       timeoutS: this.#timeoutS,
     });
@@ -742,6 +752,7 @@ class SubprocessSession implements Session {
     const helperResult =
       this.backend === "gemini-cli"
         ? runQueryHelper({
+            acpBackend: this.#acpBackend ?? undefined,
             backend: this.backend,
             maxTurns: options.maxTurns,
             model: this.model,
@@ -791,7 +802,8 @@ class SubprocessSession implements Session {
               result.stderr.trim().length > 0
             ) {
               isError = true;
-              text = classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
+              text =
+                classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
             }
 
             if (result.timedOut) {
@@ -898,6 +910,7 @@ export function backendForTeamAgent(backend: TeamSessionBackend): SessionBackend
     case "cursor":
       return "cursor";
     case "gemini-cli":
+    case "opencode":
       return "gemini-cli";
     default:
       return null;
@@ -919,5 +932,10 @@ export function createSessionForTeamAgent(
   options: SessionOptions = {},
 ): Session | null {
   const sessionBackend = backendForTeamAgent(backend);
-  return sessionBackend === null ? null : new SubprocessSession(sessionBackend, model, options);
+  return sessionBackend === null
+    ? null
+    : new SubprocessSession(sessionBackend, model, {
+        ...options,
+        acpBackend: backend === "opencode" ? "opencode" : options.acpBackend,
+      });
 }
