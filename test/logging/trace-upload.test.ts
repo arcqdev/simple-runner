@@ -122,4 +122,79 @@ describe("trace upload", () => {
     expect(metadata.fields.goal?.stringValue).toBe("Ship it safely");
     expect(metadata.fields.user?.stringValue).toBe("eddie");
   });
+
+  it("returns a no-op result when the run has no archiveable files", () => {
+    const runDir = makeTempDir();
+
+    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+
+    const result = uploadTrace(
+      {
+        agentCount: 0,
+        elapsedS: null,
+        finished: false,
+        goal: "Empty run",
+        model: "gpt-5.4",
+        orchestrator: "codex",
+        projectDir: "/tmp/project",
+        runDir,
+        runError: null,
+        runId: "20260323_empty",
+        totalCostUsd: 0,
+        totalCycles: 0,
+        totalExchanges: 0,
+      },
+      {
+        getAccessToken: () => "token-123",
+        runCommand: () => {
+          throw new Error("should not try to upload an empty archive");
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      attempted: true,
+      reason: "no trace archive entries found",
+      uploaded: false,
+    });
+  });
+
+  it("surfaces upload command failures", () => {
+    const runDir = makeTempDir();
+    writeFileSync(path.join(runDir, "log.jsonl"), '{"event":"run_start"}\n', "utf8");
+
+    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+
+    const result = uploadTrace(
+      {
+        agentCount: 1,
+        elapsedS: 1,
+        finished: false,
+        goal: "Broken upload",
+        model: "gpt-5.4",
+        orchestrator: "codex",
+        projectDir: "/tmp/project",
+        runDir,
+        runError: null,
+        runId: "20260323_broken",
+        totalCostUsd: 0,
+        totalCycles: 1,
+        totalExchanges: 1,
+      },
+      {
+        getAccessToken: () => "token-123",
+        runCommand: () => ({
+          status: 22,
+          stderr: "curl upload failed",
+          stdout: "",
+        }),
+      },
+    );
+
+    expect(result).toEqual({
+      attempted: true,
+      reason: "curl upload failed",
+      uploaded: false,
+    });
+  });
 });

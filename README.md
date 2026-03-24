@@ -44,6 +44,8 @@ kodo issue --no-open
 
 If you do not want browser windows to open automatically, set `KODO_NO_VIEWER=1`.
 
+Operator verification helpers live in [docs/verify-resume.md](/Users/eddie/dev/arcqdev/simple-runner/docs/verify-resume.md) and [scripts/README.md](/Users/eddie/dev/arcqdev/simple-runner/scripts/README.md).
+
 ## Cutover Notes
 
 The current cutover status is documented in [cutover.md](/Users/eddie/dev/arcqdev/simple-runner/cutover.md), [parity-matrix.md](/Users/eddie/dev/arcqdev/simple-runner/parity-matrix.md), and [test-migration-matrix.md](/Users/eddie/dev/arcqdev/simple-runner/test-migration-matrix.md).

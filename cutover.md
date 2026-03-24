@@ -39,4 +39,5 @@ The audited cutover blockers addressed in TS are:
 - `kodo issue` archive instructions, browser guidance, and run-folder guidance
 - `kodo update` messaging for missing `uv` and failed upgrades
 - browser suppression controlled by `KODO_NO_VIEWER`
-- regression coverage for malformed subprocess output, viewer serving edge cases, and issue archive scrubbing
+- operator docs/scripts for resume verification, viewer verification, and run inspection
+- regression coverage for malformed subprocess output, adaptive/worktree orchestration, summarizer behavior, viewer serving edge cases, trace upload, and issue archive scrubbing

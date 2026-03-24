@@ -106,15 +106,17 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 11. Operational Docs And Support Scripts
 
-- Supporting operational workflows are thinner than Python.
-  - Missing Python-equivalent docs/scripts for resume verification.
-  - Missing Python-equivalent docs/scripts for viewer verification.
-  - Missing Python’s surrounding support assets for these workflows.
+- Operator-facing support assets are now present in TypeScript.
+  - Resume verification is documented in `docs/verify-resume.md`.
+  - Viewer verification is covered by `scripts/verify-viewer-browser.ts` and documented in `scripts/README.md`.
+  - Related run-inspection workflows are covered by `scripts/analyze-run.ts` plus the mocked resume fixture helpers.
 
 ### 12. Test Coverage For Missing Areas
 
-- The TypeScript repo does not yet have parity-grade test coverage for the missing areas above.
-  - Missing broader orchestration parity coverage for adaptive flows beyond the staged/worktree cases now covered.
+- The targeted parity-grade regression coverage for the recently ported support/runtime areas is now present.
+  - Adaptive orchestration, parallel/worktree execution, summarizer behavior, and trace-upload flows are covered under `test/runtime` and `test/logging`.
+  - Browser-level viewer verification is covered by `npm run test:viewer-browser`.
+  - Remaining unported Python-suite breadth is tracked in `test-migration-matrix.md` as a broader follow-on effort rather than an unexplained gap for these shipped features.
 
 ## Not Missing Or Good Enough For Normal Use
 

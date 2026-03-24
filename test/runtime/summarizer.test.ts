@@ -113,6 +113,50 @@ describe("async summarizer", () => {
     expect(summarizer.getAccumulatedSummary()).toBe("[worker_fast] Added worker-summary.txt");
   });
 
+  it("honors explicit backend overrides", () => {
+    const ollamaRequests: string[] = [];
+    const ollamaOverride = new AsyncSummarizer({
+      env: {
+        ...envWithoutSummaryKeys(),
+        GOOGLE_API_KEY: "google-key",
+        KODO_SUMMARIZER_BACKEND: "ollama:llama3.3:70b",
+      },
+      listLocalModels: () => ["qwen3:14b"],
+      requestJson: (request) => {
+        ollamaRequests.push(request.body ?? "");
+        return {
+          ok: true,
+          status: 200,
+          text: JSON.stringify({ response: "Forced ollama override" }),
+        };
+      },
+    });
+
+    expect(ollamaOverride.getBackendForTests()).toEqual({
+      kind: "ollama",
+      param: "llama3.3:70b",
+    });
+    ollamaOverride.summarize("worker_fast", "Task", "Completed override");
+    expect(ollamaOverride.getAccumulatedSummary()).toBe("[worker_fast] Forced ollama override");
+    expect(ollamaRequests[0]).toContain('"model":"llama3.3:70b"');
+
+    const geminiOverride = new AsyncSummarizer({
+      env: {
+        ...envWithoutSummaryKeys(),
+        KODO_SUMMARIZER_BACKEND: "gemini",
+      },
+      listLocalModels: () => ["qwen3:14b"],
+      requestJson: () => {
+        throw new Error("should not be called");
+      },
+    });
+
+    expect(geminiOverride.getBackendForTests()).toEqual({
+      kind: "truncate",
+      param: null,
+    });
+  });
+
   it("accumulates summaries across queued jobs and preserves them until cleared", () => {
     const summarizer = new AsyncSummarizer({
       env: envWithoutSummaryKeys(),

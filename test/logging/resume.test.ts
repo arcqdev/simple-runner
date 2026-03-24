@@ -1,0 +1,106 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { findIncompleteRuns, getRunById } from "../../src/logging/runs.js";
+import { resumeRun } from "../../src/runtime/engine.js";
+
+function makeTempDir(label: string): string {
+  const directory = path.join(
+    os.tmpdir(),
+    `kodo-resume-test-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  );
+  mkdirSync(directory, { recursive: true });
+  return directory;
+}
+
+function writeJsonl(filePath: string, events: Array<Record<string, unknown>>): void {
+  writeFileSync(filePath, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("resume logging flow", () => {
+  it("finds an interrupted run and completes it through resumeRun", () => {
+    const homeDir = makeTempDir("home");
+    const runsDir = path.join(homeDir, ".kodo", "runs");
+    const runId = "interrupted_run";
+    const runDir = path.join(runsDir, runId);
+    const projectDir = makeTempDir("project");
+    const logFile = path.join(runDir, "log.jsonl");
+
+    mkdirSync(runDir, { recursive: true });
+    writeJsonl(logFile, [
+      {
+        event: "run_init",
+        project_dir: projectDir,
+        version: "0.4.261",
+      },
+      {
+        event: "cli_args",
+        goal_text: "Resume parity test",
+        max_cycles: 5,
+        max_exchanges: 20,
+        orchestrator: "codex",
+        orchestrator_model: "gpt-5.4",
+        project_dir: projectDir,
+        team: "quick",
+      },
+      {
+        event: "run_start",
+        goal: "Resume parity test",
+        max_cycles: 5,
+        max_exchanges: 20,
+        model: "gpt-5.4",
+        orchestrator: "codex",
+        project_dir: projectDir,
+        resumed: false,
+      },
+      {
+        event: "cycle_end",
+        finished: false,
+        summary: "Cycle 1 interrupted before completion",
+      },
+    ]);
+    writeFileSync(path.join(runDir, "goal.md"), "Resume parity test\n", "utf8");
+    writeFileSync(
+      path.join(runDir, "config.json"),
+      `${JSON.stringify(
+        {
+          autoCommit: true,
+          maxCycles: 5,
+          maxExchanges: 20,
+          orchestrator: "codex",
+          orchestratorModel: "gpt-5.4",
+          team: "quick",
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    vi.stubEnv("KODO_RUNS_DIR", runsDir);
+
+    const incomplete = findIncompleteRuns(projectDir, homeDir);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]?.runId).toBe(runId);
+    expect(incomplete[0]?.lastSummary).toContain("interrupted");
+
+    const result = resumeRun({ logFile, runId });
+    expect(result.finished).toBe(true);
+
+    const resumed = getRunById(runId, homeDir);
+    expect(resumed?.finished).toBe(true);
+    expect(resumed?.completedCycles).toBe(2);
+    expect(readFileSync(logFile, "utf8")).toContain('"event":"run_resumed"');
+    expect(readFileSync(logFile, "utf8")).toContain('"event":"run_end"');
+    expect(readFileSync(path.join(runDir, "runtime-state.json"), "utf8")).toContain(
+      '"completedCycles": 1',
+    );
+  });
+});

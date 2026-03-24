@@ -136,8 +136,8 @@ The table below now includes every Python `test_*.py` file from the March 22, 20
 | `tests/config/test_team_config.py`                      | `test/config/team-config.test.ts`                      | started | rewrite-equivalent |
 | `tests/test_list_runs.py`                               | `test/logging/list-runs.test.ts`                       | pending | rewrite-equivalent |
 | `tests/test_log.py`                                     | `test/logging/log.test.ts`                             | pending | rewrite-equivalent |
-| `tests/test_resume.py`                                  | `test/logging/resume.test.ts`                          | pending | rewrite-equivalent |
-| `tests/test_trace_upload.py`                            | `test/logging/trace-upload.test.ts`                    | pending | rewrite-equivalent |
+| `tests/test_resume.py`                                  | `test/logging/resume.test.ts`                          | started | rewrite-equivalent |
+| `tests/test_trace_upload.py`                            | `test/logging/trace-upload.test.ts`                    | started | rewrite-equivalent |
 | `tests/test_log_adversarial.py`                         | `test/regression/log-adversarial.test.ts`              | pending | rewrite-equivalent |
 | `tests/integration/test_execution.py`                   | `test/integration/execution.test.ts`                   | pending | rewrite-equivalent |
 | `tests/integration/test_infra.py`                       | `test/integration/infra.test.ts`                       | pending | rewrite-equivalent |
@@ -200,7 +200,7 @@ The table below now includes every Python `test_*.py` file from the March 22, 20
 | `tests/test_models.py`                                  | `test/regression/models.test.ts`                       | pending | rewrite-equivalent |
 | `tests/test_orchestrator.py`                            | `test/orchestrators/core-orchestrator.test.ts`         | pending | rewrite-equivalent |
 | `tests/test_regression.py`                              | `test/regression/regression.test.ts`                   | pending | rewrite-equivalent |
-| `tests/test_summarizer.py`                              | `test/regression/summarizer.test.ts`                   | pending | rewrite-equivalent |
+| `tests/test_summarizer.py`                              | `test/runtime/summarizer.test.ts`                      | started | rewrite-equivalent |
 
 ## Exit Condition For Test Parity Readiness
 
@@ -225,6 +225,9 @@ The following test areas remain explicitly deferred after cutover and are not hi
 The long-tail cutover coverage added in TS before cutover now includes:
 
 - issue archive scrubbing
+- mocked resume verification docs/scripts and regression coverage
 - viewer serve-mode port collision handling
+- browser-level viewer verification via Playwright
 - `kodo update` failure messaging
+- adaptive and parallel/worktree orchestration regression coverage
 - malformed subprocess output and structured subprocess error handling
