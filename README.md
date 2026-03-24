@@ -52,4 +52,3 @@ The remaining deferred work is non-blocking for normal CLI usage:
 
 - Python knowledge mode is not ported yet.
 - Benchmark tooling from the Python repo is not ported yet.
-- Viewer HTML richness and trace-upload UI remain simpler than Python, even though run viewing and log serving work end to end.

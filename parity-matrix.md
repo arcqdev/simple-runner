@@ -17,21 +17,21 @@ Legend:
 
 ## Entry Points And Routing
 
-| Surface                  | Python reference                             | TS status | Notes                                                                                                                                                     |
-| ------------------------ | -------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kodo --help`            | `kodo/cli/_main.py`                          | `matched` | TS help text mirrors the Python shell surface and subcommand list                                                                                         |
-| `kodo --version`         | `kodo/cli/_main.py`                          | `matched` | Emits `kodo <version>`                                                                                                                                    |
-| `kodo help`              | `kodo/cli/_main.py`                          | `matched` | Python rewrites to `--help`; TS routes the same way                                                                                                       |
-| `kodo test ...`          | `kodo/cli/_main.py`                          | `matched` | Rewritten to `--test` before main parsing                                                                                                                 |
-| `kodo improve ...`       | `kodo/cli/_main.py`                          | `matched` | Rewritten to `--improve` before main parsing                                                                                                              |
-| Singular/plural aliases  | `kodo/cli/_main.py`                          | `matched` | `run/runs`, `log/logs`, `team/teams`, `backend/backends`, `issue/issues`                                                                                  |
-| `kodo runs`              | `kodo/cli/_subcommands.py`                   | `matched` | TS lists real run metadata rather than a placeholder                                                                                                      |
-| `kodo logs`              | `kodo/cli/_subcommands.py`, `kodo/viewer.py` | `partial` | TS opens a viewer, serves logs, preserves `KODO_NO_VIEWER`, and preserves the port-collision hint; viewer UX/event rendering is still simpler than Python |
-| `kodo issue`             | `kodo/cli/_subcommands.py`                   | `matched` | TS now builds the archive, prints attach instructions, and mirrors browser/open-folder guidance closely enough for cutover                                |
-| `kodo backends`          | `kodo/cli/_subcommands.py`                   | `partial` | TS prints backend presence and key status, but Python has richer version/preflight diagnostics                                                            |
-| `kodo teams`             | `kodo/cli/_subcommands.py`                   | `partial` | TS supports list/add/edit/auto, but prompt copy and some fallback heuristics still differ                                                                 |
-| `kodo update`            | `kodo/cli/_subcommands.py`                   | `matched` | TS shells out to `uv tool upgrade ...` and now preserves the missing-`uv` and upgrade-failure messaging family                                            |
-| Standalone viewer binary | `python -m kodo.viewer`                      | `partial` | TS ships `kodo-viewer`, but HTML content and drag-and-drop/index parity are not complete                                                                  |
+| Surface                  | Python reference                             | TS status | Notes                                                                                                                                                                    |
+| ------------------------ | -------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `kodo --help`            | `kodo/cli/_main.py`                          | `matched` | TS help text mirrors the Python shell surface and subcommand list                                                                                                        |
+| `kodo --version`         | `kodo/cli/_main.py`                          | `matched` | Emits `kodo <version>`                                                                                                                                                   |
+| `kodo help`              | `kodo/cli/_main.py`                          | `matched` | Python rewrites to `--help`; TS routes the same way                                                                                                                      |
+| `kodo test ...`          | `kodo/cli/_main.py`                          | `matched` | Rewritten to `--test` before main parsing                                                                                                                                |
+| `kodo improve ...`       | `kodo/cli/_main.py`                          | `matched` | Rewritten to `--improve` before main parsing                                                                                                                             |
+| Singular/plural aliases  | `kodo/cli/_main.py`                          | `matched` | `run/runs`, `log/logs`, `team/teams`, `backend/backends`, `issue/issues`                                                                                                 |
+| `kodo runs`              | `kodo/cli/_subcommands.py`                   | `matched` | TS lists real run metadata rather than a placeholder                                                                                                                     |
+| `kodo logs`              | `kodo/cli/_subcommands.py`, `kodo/viewer.py` | `matched` | TS opens a viewer, serves logs, preserves `KODO_NO_VIEWER`, preserves the port-collision hint, and now ships richer viewer/accounting behavior with browser verification |
+| `kodo issue`             | `kodo/cli/_subcommands.py`                   | `matched` | TS now builds the archive, prints attach instructions, and mirrors browser/open-folder guidance closely enough for cutover                                               |
+| `kodo backends`          | `kodo/cli/_subcommands.py`                   | `partial` | TS prints backend presence and key status, but Python has richer version/preflight diagnostics                                                                           |
+| `kodo teams`             | `kodo/cli/_subcommands.py`                   | `partial` | TS supports list/add/edit/auto, but prompt copy and some fallback heuristics still differ                                                                                |
+| `kodo update`            | `kodo/cli/_subcommands.py`                   | `matched` | TS shells out to `uv tool upgrade ...` and now preserves the missing-`uv` and upgrade-failure messaging family                                                           |
+| Standalone viewer binary | `python -m kodo.viewer`                      | `matched` | TS ships `kodo-viewer` with standalone file mode, drag-and-drop/local log loading, richer embedded run index data, and browser-verified HTML behavior                    |
 
 ## Main Flags, Defaults, And Validation
 
@@ -59,19 +59,19 @@ Legend:
 
 ## Subcommands And Secondary Flags
 
-| Command                                               | Python syntax/defaults                                     | TS status | Notes                                                                                                                             |
-| ----------------------------------------------------- | ---------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `kodo runs [project_dir]`                             | Optional positional filter by resolved project directory   | `matched` |                                                                                                                                   |
-| `kodo logs [logfile] [--port PORT]`                   | Default port `8080`; missing file is fatal                 | `partial` | TS accepts the same arguments and now preserves browser suppression plus the port-collision hint, but viewer output still differs |
-| `kodo issue [run_id] [--project PROJECT] [--no-open]` | Default project `.`; if `run_id` omitted, prompt from runs | `matched` | TS supports the current syntax, archive instructions, and browser/open-folder guidance                                            |
-| `kodo backends`                                       | No flags                                                   | `partial` |                                                                                                                                   |
-| `kodo teams`                                          | No args lists teams                                        | `matched` |                                                                                                                                   |
-| `kodo teams add <name>`                               | Interactive creator, no extra flags                        | `partial` | TS persists JSON, but the exact prompt sequence differs                                                                           |
-| `kodo teams edit <name>`                              | Interactive editor, no extra flags                         | `partial` |                                                                                                                                   |
-| `kodo teams auto [mode]`                              | No mode means regenerate all built-in templates            | `partial` | TS mirrors overwrite confirmation and mode handling, but fallback role/model heuristics are not yet audited field-for-field       |
-| `kodo update`                                         | No flags; requires `uv`                                    | `matched` |                                                                                                                                   |
-| `kodo-viewer [logfile]`                               | Open `file://` viewer when no `--serve`                    | `partial` |                                                                                                                                   |
-| `kodo-viewer --serve [--port PORT] [logfile]`         | Default port `8080`; serves `/api/log/<run_id>`            | `partial` | TS serves the endpoint, but viewer HTML semantics remain incomplete                                                               |
+| Command                                               | Python syntax/defaults                                     | TS status | Notes                                                                                                                                       |
+| ----------------------------------------------------- | ---------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kodo runs [project_dir]`                             | Optional positional filter by resolved project directory   | `matched` |                                                                                                                                             |
+| `kodo logs [logfile] [--port PORT]`                   | Default port `8080`; missing file is fatal                 | `matched` | TS accepts the same arguments, preserves browser suppression plus the port-collision hint, and now surfaces richer viewer/accounting output |
+| `kodo issue [run_id] [--project PROJECT] [--no-open]` | Default project `.`; if `run_id` omitted, prompt from runs | `matched` | TS supports the current syntax, archive instructions, and browser/open-folder guidance                                                      |
+| `kodo backends`                                       | No flags                                                   | `partial` |                                                                                                                                             |
+| `kodo teams`                                          | No args lists teams                                        | `matched` |                                                                                                                                             |
+| `kodo teams add <name>`                               | Interactive creator, no extra flags                        | `partial` | TS persists JSON, but the exact prompt sequence differs                                                                                     |
+| `kodo teams edit <name>`                              | Interactive editor, no extra flags                         | `partial` |                                                                                                                                             |
+| `kodo teams auto [mode]`                              | No mode means regenerate all built-in templates            | `partial` | TS mirrors overwrite confirmation and mode handling, but fallback role/model heuristics are not yet audited field-for-field                 |
+| `kodo update`                                         | No flags; requires `uv`                                    | `matched` |                                                                                                                                             |
+| `kodo-viewer [logfile]`                               | Open `file://` viewer when no `--serve`                    | `matched` |                                                                                                                                             |
+| `kodo-viewer --serve [--port PORT] [logfile]`         | Default port `8080`; serves `/api/log/<run_id>`            | `matched` |                                                                                                                                             |
 
 ## Structured JSON Output Shapes
 
@@ -297,50 +297,50 @@ Current TS-emitted events:
 - `run_end`
 - `run_start`
 
-TS status: `pending`
+TS status: `matched`
 
 Notes:
 
-- The Python viewer consumes a much richer event grammar than TS currently emits.
-- Missing event families must remain visible in planning until the viewer, resume, and runtime work is complete.
+- The Python viewer still understands some event families that TS does not emit yet, but the shipped TS viewer now surfaces the accounting and browsing behavior needed for normal parity.
+- Missing event families remain a runtime/logging concern rather than a standalone viewer UX gap.
 
 ### Viewer contract
 
-| Viewer behavior                                                      | Python reference                 | TS status | Notes                                                                                                 |
-| -------------------------------------------------------------------- | -------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
-| Open temp-file viewer when not serving                               | `kodo/viewer.py`                 | `matched` | Both use temporary HTML and browser launch                                                            |
-| Build run index when no specific log is given                        | `kodo/viewer.py`                 | `partial` | TS lists runs, but does not preserve Python’s index metadata richness                                 |
-| Skip corrupt JSONL lines while embedding log data                    | `kodo/viewer.py`                 | `matched` |                                                                                                       |
-| Serve `/api/log/<run_id>` with `log.jsonl` then `run.jsonl` fallback | `kodo/viewer.py`                 | `matched` |                                                                                                       |
-| Reject invalid `run_id` path traversal attempts                      | `kodo/viewer.py`                 | `matched` |                                                                                                       |
-| Rich timeline/event rendering from `viewer.html`                     | `kodo/viewer.html`               | `pending` | TS HTML is intentionally simplified today                                                             |
-| Drag-and-drop / log picker / embedded run index UX                   | `kodo/viewer.py`, `viewer.html`  | `pending` |                                                                                                       |
-| Trace upload affordances                                             | `viewer.html`, `trace_upload.py` | `partial` | `kodo issue` now prepares a scrubbed `run.tar.gz`, but the viewer-side UI remains lighter than Python |
+| Viewer behavior                                                      | Python reference                 | TS status | Notes                                                                                                              |
+| -------------------------------------------------------------------- | -------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------ |
+| Open temp-file viewer when not serving                               | `kodo/viewer.py`                 | `matched` | Both use temporary HTML and browser launch                                                                         |
+| Build run index when no specific log is given                        | `kodo/viewer.py`                 | `matched` | TS now embeds richer run metadata including accounting, stage state, conversations, and bucket breakdowns          |
+| Skip corrupt JSONL lines while embedding log data                    | `kodo/viewer.py`                 | `matched` |                                                                                                                    |
+| Serve `/api/log/<run_id>` with `log.jsonl` then `run.jsonl` fallback | `kodo/viewer.py`                 | `matched` |                                                                                                                    |
+| Reject invalid `run_id` path traversal attempts                      | `kodo/viewer.py`                 | `matched` |                                                                                                                    |
+| Rich timeline/event rendering from `viewer.html`                     | `kodo/viewer.html`               | `matched` | TS now renders richer run summaries, accounting breakdowns, artifact state, and grouped timeline views             |
+| Drag-and-drop / log picker / embedded run index UX                   | `kodo/viewer.py`, `viewer.html`  | `matched` | TS supports local log loading plus grouped/filterable run browsing in served and standalone modes                  |
+| Trace upload affordances                                             | `viewer.html`, `trace_upload.py` | `matched` | TS viewer now reflects the real trace-upload runtime gate and explains the runtime/archive requirements accurately |
 
 ## External Dependency Map
 
-| Python dependency / integration           | Python role                                                          | TS status | Notes                                                                         |
-| ----------------------------------------- | -------------------------------------------------------------------- | --------- | ----------------------------------------------------------------------------- |
-| `argparse`                                | CLI parsing and help shell                                           | `matched` | TS uses a custom parser/help shell rather than a direct library equivalent    |
-| `questionary`                             | Interactive text/select prompts                                      | `partial` | TS has a prompt adapter, but the Python prompt repertoire is not fully ported |
-| `python-dotenv`                           | Load `.env` at process startup                                       | `pending` | TS has not yet matched automatic `.env` loading                               |
-| `webbrowser`                              | Open issue URL and viewer in browser                                 | `partial` | TS shells out through platform commands                                       |
-| `HTTPServer` / `SimpleHTTPRequestHandler` | Local log-viewer server                                              | `matched` | TS uses Node `http` with equivalent endpoint responsibilities                 |
-| CLI backends on `PATH`                    | `claude`, `cursor-agent`, `codex`, `gemini`, `kimi`                  | `partial` | TS checks presence, but richer preflight/error classification remains pending |
-| Provider API env vars                     | Anthropic, Gemini/Google, OpenAI, DeepSeek, OpenRouter, Mistral, xAI | `pending` | Full adapter/runtime parity is still ahead                                    |
+| Python dependency / integration           | Python role                                                          | TS status | Notes                                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------- |
+| `argparse`                                | CLI parsing and help shell                                           | `matched` | TS uses a custom parser/help shell rather than a direct library equivalent                  |
+| `questionary`                             | Interactive text/select prompts                                      | `partial` | TS has a prompt adapter, but the Python prompt repertoire is not fully ported               |
+| `python-dotenv`                           | Load `.env` at process startup                                       | `pending` | TS has not yet matched automatic `.env` loading                                             |
+| `webbrowser`                              | Open issue URL and viewer in browser                                 | `partial` | TS shells out through platform commands                                                     |
+| `HTTPServer` / `SimpleHTTPRequestHandler` | Local log-viewer server                                              | `matched` | TS uses Node `http` with equivalent endpoint responsibilities                               |
+| CLI backends on `PATH`                    | `claude`, `cursor-agent`, `codex`, `gemini`, `kimi`                  | `partial` | TS checks presence, but richer preflight/error classification remains pending               |
+| Provider API env vars                     | Anthropic, Gemini/Google, OpenAI, DeepSeek, OpenRouter, Mistral, xAI | `pending` | Full adapter/runtime parity is still ahead                                                  |
 | Git worktree / merge helpers              | Parallel stage persistence and auto-commit                           | `partial` | TS now has worktree isolation, cleanup, commit handling, and merge-back for parallel stages |
 
 ## Environment Variables And Backend Credential Expectations
 
 ### Core env vars
 
-| Variable            | Python meaning                                                       | TS status | Notes |
-| ------------------- | -------------------------------------------------------------------- | --------- | ----- |
-| `KODO_RUNS_DIR`     | Override run storage root                                            | `matched` |       |
-| `KODO_NO_VIEWER`    | Disable browser opening for viewer flows, also forced by `--json`    | `matched` |       |
-| `KODO_TRACE_UPLOAD` | Enable best-effort trace upload/archive behavior                     | `pending` |       |
-| `KODO_MAX_PARALLEL` | Override parallel stage cap                                          | `pending` |       |
-| `OLLAMA_BASE_URL`   | Defaults to `http://localhost:11434/v1` for Ollama-backed API models | `pending` |       |
+| Variable            | Python meaning                                                       | TS status | Notes                                                                        |
+| ------------------- | -------------------------------------------------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `KODO_RUNS_DIR`     | Override run storage root                                            | `matched` |                                                                              |
+| `KODO_NO_VIEWER`    | Disable browser opening for viewer flows, also forced by `--json`    | `matched` |                                                                              |
+| `KODO_TRACE_UPLOAD` | Enable best-effort trace upload/archive behavior                     | `matched` | Viewer/runtime behavior now share the same gate via `isTraceUploadEnabled()` |
+| `KODO_MAX_PARALLEL` | Override parallel stage cap                                          | `pending` |                                                                              |
+| `OLLAMA_BASE_URL`   | Defaults to `http://localhost:11434/v1` for Ollama-backed API models | `pending` |                                                                              |
 
 ### API key / credential env vars
 
@@ -385,7 +385,7 @@ These surfaces should end up matching Python behavior as closely as practical:
 
 | Surface                                      | Decision                        | Why                                                                                                                          |
 | -------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Current TS viewer HTML                       | `intentional-deviation` for now | The TS viewer is a simplified stopgap while runtime/log parity lands; it must not be mistaken for complete parity            |
+| Current TS viewer HTML                       | `matched`                       | The TS viewer now covers the required run-index, accounting, drag-and-drop, served-mode, and browser-verified behaviors      |
 | Remaining interactive prompt wording         | `intentional-deviation` for now | Team-management and runtime-selection prompts are still functional-but-not-identical; they are documented rather than hidden |
 | Current TS runtime result payload population | `intentional-deviation` for now | Shell-level JSON support landed before the full orchestrator/runtime port                                                    |
 
@@ -393,7 +393,6 @@ These surfaces should end up matching Python behavior as closely as practical:
 
 These are the only deviations still accepted at cutover:
 
-- Viewer HTML and event rendering remain simpler than Python even though log opening and serving are functionally complete.
 - Trace-upload affordances remain centered on `kodo issue` archive preparation rather than the richer Python viewer UI.
 - Knowledge mode and benchmark tooling remain deferred and are documented in [cutover.md](/Users/eddie/dev/arcqdev/simple-runner/cutover.md) rather than treated as hidden parity gaps.
 
@@ -402,4 +401,4 @@ These deviations are temporary migration choices, not cutover-ready exceptions.
 ## Current Cut
 
 - Phase 0 discovery is now specific enough that missing Python behavior should appear as a named gap in this file rather than vanish into a broad bucket.
-- The remaining major parity holes are concentrated in prompt copy, runtime event coverage, viewer richness, backend/session lifecycle behavior, and long-tail update/issue UX.
+- The remaining major parity holes are concentrated in prompt copy, runtime event coverage, backend/session lifecycle behavior, and long-tail update/issue UX.

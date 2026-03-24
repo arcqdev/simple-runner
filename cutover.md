@@ -27,7 +27,6 @@ The following Python surfaces are intentionally deferred after cutover and are n
 
 These deviations remain acceptable at cutover and are documented instead of treated as hidden parity gaps:
 
-- Viewer UX is functionally complete for local files and HTTP serving, but the HTML/event presentation remains simpler than Python.
 - Trace-upload browser affordances are still lighter than Python even though `kodo issue` now prepares and points to the local archive.
 - Orchestration still uses the documented TS simplifications in [orchestrator-parity-notes.md](/Users/eddie/dev/arcqdev/simple-runner/orchestrator-parity-notes.md), especially sequential handling where Python previously used broader worktree fan-out.
 

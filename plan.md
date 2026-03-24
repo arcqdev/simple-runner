@@ -99,10 +99,10 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 10. Viewer Richness
 
-- Viewer support exists, but the Python viewer remains richer.
-  - Missing parity with the reusable Python HTML viewer app.
-  - Missing richer stats presentation driven by Python run accounting.
-  - Missing Python-level browser-verified viewer behavior coverage.
+- Viewer richness is now closed at the current parity target.
+  - Embedded run index metadata includes run accounting, stage state, conversation artifacts, and per-agent/bucket breakdowns.
+  - The TypeScript viewer surfaces richer run summaries, picker filtering, artifact state, and accounting breakdowns in both standalone and served modes.
+  - Browser-level verification now covers the main served-viewer and embedded-log behaviors.
 
 ### 11. Operational Docs And Support Scripts
 
@@ -114,7 +114,6 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 ### 12. Test Coverage For Missing Areas
 
 - The TypeScript repo does not yet have parity-grade test coverage for the missing areas above.
-  - Missing browser-level viewer verification coverage.
   - Missing broader orchestration parity coverage for adaptive flows beyond the staged/worktree cases now covered.
 
 ## Not Missing Or Good Enough For Normal Use

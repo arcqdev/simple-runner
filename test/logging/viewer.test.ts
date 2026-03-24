@@ -25,6 +25,17 @@ describe("viewer", () => {
       logFile,
       [
         JSON.stringify({ ts: "2026-03-23T00:00:00Z", t: 0, event: "run_start", goal: "Ship it" }),
+        JSON.stringify({
+          ts: "2026-03-23T00:00:00Z",
+          t: 0.5,
+          agent: "worker_fast",
+          cost_bucket: "codex_subscription",
+          elapsed_s: 0.5,
+          event: "agent_run_end",
+          input_tokens: 10,
+          output_tokens: 6,
+          response_text: "literal </script> marker survived",
+        }),
         "not-json",
         JSON.stringify({ ts: "2026-03-23T00:00:01Z", t: 1, event: "cycle_end", summary: "done" }),
       ].join("\n") + "\n",
@@ -43,6 +54,8 @@ describe("viewer", () => {
     expect(html).not.toContain("not-json");
     expect(html).toContain("const EMBEDDED_DATA =");
     expect(html).toContain("const EMBEDDED_INDEX =");
+    expect(html).toContain("\\u003c/script>");
+    expect(html).toContain("literal \\u003c/script> marker survived");
   });
 
   it("skips browser launching in test environments", () => {
@@ -78,6 +91,8 @@ describe("viewer", () => {
     expect(html).toContain("project_name");
     expect(html).toContain("conversation_count");
     expect(html).toContain("total_agent_calls");
+    expect(html).toContain("agent_stats");
+    expect(html).toContain("orchestrator_bucket_breakdown");
   });
 
   it("shows trace-upload affordances only when enabled", () => {

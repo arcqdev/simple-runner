@@ -15,6 +15,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { listRuns, runsRoot } from "./logging/runs.js";
+import { isTraceUploadEnabled } from "./logging/trace-upload.js";
 import { safeJoin } from "./runtime/fs.js";
 
 type ViewerOptions = {
@@ -33,7 +34,13 @@ type ViewerServer = {
 };
 
 type ViewerIndexRun = {
+  agent_stats: ViewerIndexAgentStat[];
+  completed_stage_count: number;
   conversation_count: number;
+  conversation_logs: string[];
+  current_stage_cycles: number;
+  has_stages: boolean;
+  last_summary: string;
   completed_cycles: number;
   error_count: number;
   finished: boolean;
@@ -42,14 +49,43 @@ type ViewerIndexRun = {
   is_debug: boolean;
   log_file: string;
   max_cycles: number;
+  max_exchanges: number;
   model: string;
+  orchestrator_bucket_breakdown: ViewerIndexBucketStat[];
   orchestrator_cost_bucket: string;
   orchestrator: string;
   output_tokens: number;
+  parallel_stage_count: number;
+  pending_exchange_count: number;
   project_dir: string;
   project_name: string;
   run_id: string;
+  stage_summaries: string[];
+  team_count: number;
+  team_preset: string;
   total_agent_calls: number;
+  total_elapsed_s: number;
+};
+
+type ViewerIndexAgentStat = {
+  agent: string;
+  calls: number;
+  conversation_count: number;
+  cost_bucket: string;
+  elapsed_s: number;
+  error_count: number;
+  input_tokens: number;
+  output_tokens: number;
+};
+
+type ViewerIndexBucketStat = {
+  calls: number;
+  conversation_count: number;
+  cost_bucket: string;
+  elapsed_s: number;
+  error_count: number;
+  input_tokens: number;
+  output_tokens: number;
 };
 
 function cleanupStaleViewerFiles(now = Date.now()): void {
@@ -112,7 +148,24 @@ function loadRunLog(runId: string): string {
 
 function buildRunIndex(): ViewerIndexRun[] {
   return listRuns().map((run) => ({
+    agent_stats: Object.entries(run.agentStats)
+      .map(([agent, stats]) => ({
+        agent,
+        calls: stats.calls,
+        conversation_count: stats.conversationLogs.length,
+        cost_bucket: stats.costBucket,
+        elapsed_s: Number(stats.elapsedS.toFixed(3)),
+        error_count: stats.errors,
+        input_tokens: stats.inputTokens,
+        output_tokens: stats.outputTokens,
+      }))
+      .sort((left, right) => right.calls - left.calls || left.agent.localeCompare(right.agent)),
+    completed_stage_count: run.completedStages.length,
     conversation_count: run.conversationArtifacts.length,
+    conversation_logs: run.conversationArtifacts,
+    current_stage_cycles: run.currentStageCycles,
+    has_stages: run.hasStages,
+    last_summary: run.lastSummary,
     completed_cycles: run.completedCycles,
     error_count: run.errorCount,
     finished: run.finished,
@@ -121,15 +174,54 @@ function buildRunIndex(): ViewerIndexRun[] {
     is_debug: run.isDebug,
     log_file: run.logFile,
     max_cycles: run.maxCycles,
+    max_exchanges: run.maxExchanges,
     model: run.model,
+    orchestrator_bucket_breakdown: Object.values(
+      Object.values(run.agentStats).reduce<Record<string, ViewerIndexBucketStat>>(
+        (accumulator, stats) => {
+          const key = stats.costBucket || "unknown";
+          const current = accumulator[key] ?? {
+            calls: 0,
+            conversation_count: 0,
+            cost_bucket: key,
+            elapsed_s: 0,
+            error_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+          };
+          current.calls += stats.calls;
+          current.conversation_count += stats.conversationLogs.length;
+          current.elapsed_s = Number((current.elapsed_s + stats.elapsedS).toFixed(3));
+          current.error_count += stats.errors;
+          current.input_tokens += stats.inputTokens;
+          current.output_tokens += stats.outputTokens;
+          accumulator[key] = current;
+          return accumulator;
+        },
+        {},
+      ),
+    ).sort(
+      (left, right) =>
+        right.calls - left.calls || left.cost_bucket.localeCompare(right.cost_bucket),
+    ),
     orchestrator_cost_bucket: run.orchestratorCostBucket,
     orchestrator: run.orchestrator,
     output_tokens: run.outputTokens,
+    parallel_stage_count: Object.keys(run.parallelStageState).length,
+    pending_exchange_count: run.pendingExchanges.length,
     project_dir: run.projectDir,
     project_name: path.basename(run.projectDir) || "?",
     run_id: run.runId,
+    stage_summaries: run.stageSummaries,
+    team_count: run.team.length,
+    team_preset: run.teamPreset,
     total_agent_calls: run.totalAgentCalls,
+    total_elapsed_s: run.totalElapsedS,
   }));
+}
+
+function serializeScriptValue(value: unknown): string {
+  return JSON.stringify(value).replace(/</gu, "\\u003c");
 }
 
 function buildHtml(logPath: string | null): string {
@@ -137,6 +229,7 @@ function buildHtml(logPath: string | null): string {
   const index = buildRunIndex();
   const title =
     logPath === null ? "kodo log viewer" : `kodo log viewer — ${path.basename(logPath)}`;
+  const traceUploadEnabled = isTraceUploadEnabled();
 
   return `<!doctype html>
 <html lang="en">
@@ -241,10 +334,39 @@ function buildHtml(logPath: string | null): string {
       display: grid;
       gap: 14px;
     }
+    .picker-tools {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .filter-row label {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+    }
     .run-grid {
       display: grid;
       gap: 14px;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .run-day {
+      display: grid;
+      gap: 10px;
+    }
+    .day-heading {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
     }
     .run-card, .timeline-card {
       border: 1px solid var(--border);
@@ -254,6 +376,8 @@ function buildHtml(logPath: string | null): string {
     }
     .run-card {
       cursor: pointer;
+      display: grid;
+      gap: 12px;
     }
     .run-card:hover {
       transform: translateY(-1px);
@@ -283,15 +407,29 @@ function buildHtml(logPath: string | null): string {
       color: var(--warn);
     }
     .goal {
-      margin-top: 10px;
       font-size: 15px;
       line-height: 1.55;
     }
     .kv {
-      margin-top: 12px;
       display: grid;
       gap: 6px;
       font-size: 13px;
+      color: var(--muted);
+    }
+    .metric-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(83, 57, 41, 0.14);
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.92);
+      font-size: 12px;
       color: var(--muted);
     }
     .trace-box {
@@ -310,6 +448,11 @@ function buildHtml(logPath: string | null): string {
       gap: 14px;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
+    .detail-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
     .summary-box {
       border: 1px solid var(--border);
       border-radius: 18px;
@@ -323,6 +466,51 @@ function buildHtml(logPath: string | null): string {
       margin-bottom: 6px;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+    }
+    .detail-card {
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: var(--panel-strong);
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .detail-card h3 {
+      font-size: 16px;
+      margin-bottom: 0;
+    }
+    .detail-list {
+      display: grid;
+      gap: 8px;
+    }
+    .detail-item {
+      border: 1px solid rgba(83, 57, 41, 0.08);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.86);
+      padding: 10px 12px;
+    }
+    .detail-item strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .detail-item span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .artifact-list {
+      display: grid;
+      gap: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+    .artifact-item {
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: var(--code-bg);
+      border: 1px solid rgba(83, 57, 41, 0.08);
+      overflow-wrap: anywhere;
     }
     .timeline {
       display: grid;
@@ -380,6 +568,17 @@ function buildHtml(logPath: string | null): string {
       background: rgba(255, 255, 255, 0.45);
       text-align: center;
     }
+    @media (max-width: 720px) {
+      main {
+        padding: 24px 14px 64px;
+      }
+      .hero, .picker, .viewer {
+        padding: 18px;
+      }
+      .picker-tools {
+        align-items: flex-start;
+      }
+    }
   </style>
 </head>
 <body>
@@ -398,38 +597,61 @@ function buildHtml(logPath: string | null): string {
 
       <section class="panel picker" id="picker">
         <div class="trace-box hidden" id="trace-box"></div>
+        <div class="picker-tools">
+          <p class="subtle" id="picker-meta"></p>
+          <div class="filter-row" id="filter-row"></div>
+        </div>
         <div class="drop-zone" id="drop-zone">Drop a .jsonl file here to inspect it without leaving the browser.</div>
         <div class="run-grid" id="run-grid"></div>
       </section>
 
       <section class="panel viewer hidden" id="viewer">
         <div class="summary-grid" id="summary-grid"></div>
+        <div class="detail-grid">
+          <section class="detail-card" id="accounting-card">
+            <h3>Accounting Breakdown</h3>
+            <div class="detail-list" id="accounting-list"></div>
+          </section>
+          <section class="detail-card" id="artifacts-card">
+            <h3>Artifacts And State</h3>
+            <div class="detail-list" id="artifacts-list"></div>
+            <div class="artifact-list hidden" id="artifact-files"></div>
+          </section>
+        </div>
         <div class="timeline" id="timeline"></div>
       </section>
     </div>
   </main>
   <script>
-    const EMBEDDED_DATA = ${JSON.stringify(events)};
-    const EMBEDDED_INDEX = ${JSON.stringify(index)};
-    const EMBEDDED_CWD = ${JSON.stringify(process.cwd())};
-    const TRACE_UPLOAD_ENABLED = ${JSON.stringify(
-      ["1", "true", "yes"].includes((process.env.KODO_TRACE_UPLOAD ?? "").trim().toLowerCase()),
-    )};
-    const INITIAL_LOG_PATH = ${JSON.stringify(logPath ?? "")};
-    const INITIAL_TITLE = ${JSON.stringify(title)};
+    const EMBEDDED_DATA = ${serializeScriptValue(events)};
+    const EMBEDDED_INDEX = ${serializeScriptValue(index)};
+    const EMBEDDED_CWD = ${serializeScriptValue(process.cwd())};
+    const TRACE_UPLOAD_ENABLED = ${serializeScriptValue(traceUploadEnabled)};
+    const INITIAL_LOG_PATH = ${serializeScriptValue(logPath ?? "")};
+    const INITIAL_TITLE = ${serializeScriptValue(title)};
 
     const titleEl = document.getElementById("title");
     const metaEl = document.getElementById("meta");
     const pickerEl = document.getElementById("picker");
+    const pickerMetaEl = document.getElementById("picker-meta");
+    const filterRowEl = document.getElementById("filter-row");
     const viewerEl = document.getElementById("viewer");
     const backBtnEl = document.getElementById("back-btn");
     const runGridEl = document.getElementById("run-grid");
     const summaryGridEl = document.getElementById("summary-grid");
+    const accountingListEl = document.getElementById("accounting-list");
+    const artifactsListEl = document.getElementById("artifacts-list");
+    const artifactFilesEl = document.getElementById("artifact-files");
     const timelineEl = document.getElementById("timeline");
     const logInputEl = document.getElementById("log-input");
     const traceBadgeEl = document.getElementById("trace-badge");
     const traceBoxEl = document.getElementById("trace-box");
     const dropZoneEl = document.getElementById("drop-zone");
+    const RUN_ID_RE = /^(\\d{4})(\\d{2})(\\d{2})_(\\d{2})(\\d{2})(\\d{2})$/u;
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let showAllProjects = false;
+    let showDebugRuns = false;
+    let currentRunMeta = null;
 
     function escapeHtml(text) {
       const node = document.createElement("div");
@@ -439,6 +661,134 @@ function buildHtml(logPath: string | null): string {
 
     function formatSeconds(value) {
       return typeof value === "number" ? value.toFixed(3) + "s" : "";
+    }
+
+    function formatCount(value, singular, plural = singular + "s") {
+      return value + " " + (value === 1 ? singular : plural);
+    }
+
+    function formatBucket(bucket) {
+      return String(bucket || "unknown").replaceAll("_", " ");
+    }
+
+    function formatRunDay(runId) {
+      const match = RUN_ID_RE.exec(String(runId || ""));
+      if (!match) return "Other";
+      return MONTHS[Number.parseInt(match[2], 10) - 1] + " " + Number.parseInt(match[3], 10) + ", " + match[1];
+    }
+
+    function formatRunTime(runId) {
+      const match = RUN_ID_RE.exec(String(runId || ""));
+      if (!match) return String(runId || "?");
+      return match[4] + ":" + match[5] + ":" + match[6];
+    }
+
+    function latestT(events) {
+      return events.reduce((max, record) => typeof record.t === "number" && record.t > max ? record.t : max, 0);
+    }
+
+    function buildAgentStatsFromEvents(events) {
+      const byAgent = new Map();
+      for (const record of events) {
+        if (record.event !== "agent_run_end" || typeof record.agent !== "string" || record.agent.length === 0) {
+          continue;
+        }
+        const current = byAgent.get(record.agent) ?? {
+          agent: record.agent,
+          calls: 0,
+          conversation_count: 0,
+          cost_bucket: String(record.cost_bucket ?? "unknown"),
+          elapsed_s: 0,
+          error_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+        };
+        current.calls += 1;
+        current.conversation_count += typeof record.conversation_log === "string" ? 1 : 0;
+        current.elapsed_s = Number((current.elapsed_s + (typeof record.elapsed_s === "number" ? record.elapsed_s : 0)).toFixed(3));
+        current.error_count += record.is_error === true ? 1 : 0;
+        current.input_tokens += typeof record.input_tokens === "number" ? record.input_tokens : 0;
+        current.output_tokens += typeof record.output_tokens === "number" ? record.output_tokens : 0;
+        if (typeof record.cost_bucket === "string" && record.cost_bucket.length > 0) {
+          current.cost_bucket = record.cost_bucket;
+        }
+        byAgent.set(record.agent, current);
+      }
+      return [...byAgent.values()].sort((left, right) => right.calls - left.calls || left.agent.localeCompare(right.agent));
+    }
+
+    function buildBucketStats(agentStats) {
+      const buckets = new Map();
+      for (const stat of agentStats) {
+        const key = stat.cost_bucket || "unknown";
+        const current = buckets.get(key) ?? {
+          calls: 0,
+          conversation_count: 0,
+          cost_bucket: key,
+          elapsed_s: 0,
+          error_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+        };
+        current.calls += stat.calls;
+        current.conversation_count += stat.conversation_count;
+        current.elapsed_s = Number((current.elapsed_s + stat.elapsed_s).toFixed(3));
+        current.error_count += stat.error_count;
+        current.input_tokens += stat.input_tokens;
+        current.output_tokens += stat.output_tokens;
+        buckets.set(key, current);
+      }
+      return [...buckets.values()].sort((left, right) => right.calls - left.calls || left.cost_bucket.localeCompare(right.cost_bucket));
+    }
+
+    function inferConversationLogs(events) {
+      return [...new Set(events
+        .map((record) => typeof record.conversation_log === "string" ? record.conversation_log : null)
+        .filter(Boolean))];
+    }
+
+    function deriveRunMeta(events, embeddedMeta) {
+      if (embeddedMeta) {
+        return embeddedMeta;
+      }
+      const args = events.find((record) => record.event === "cli_args") || {};
+      const start = events.find((record) => record.event === "run_start") || {};
+      const runEnd = [...events].reverse().find((record) => record.event === "run_end") || null;
+      const stageEnds = events.filter((record) => record.event === "stage_end" && record.finished);
+      const agentStats = buildAgentStatsFromEvents(events);
+      return {
+        agent_stats: agentStats,
+        completed_stage_count: stageEnds.length,
+        conversation_count: inferConversationLogs(events).length,
+        conversation_logs: inferConversationLogs(events),
+        current_stage_cycles: 0,
+        has_stages: events.some((record) => record.event === "stage_start" || record.event === "stage_end"),
+        last_summary: String(runEnd?.summary ?? [...events].reverse().find((record) => typeof record.summary === "string")?.summary ?? ""),
+        completed_cycles: events.filter((record) => record.event === "cycle_end").length,
+        error_count: agentStats.reduce((sum, entry) => sum + entry.error_count, 0),
+        finished: runEnd ? runEnd.finished !== false : false,
+        goal: String(start.goal ?? args.goal_text ?? ""),
+        input_tokens: agentStats.reduce((sum, entry) => sum + entry.input_tokens, 0),
+        is_debug: events.some((record) => record.event === "debug_run_start"),
+        log_file: INITIAL_LOG_PATH || "",
+        max_cycles: Number(start.max_cycles ?? args.max_cycles ?? 0),
+        max_exchanges: Number(start.max_exchanges ?? args.max_exchanges ?? 0),
+        model: String(start.model ?? args.orchestrator_model ?? "unknown"),
+        orchestrator_bucket_breakdown: buildBucketStats(agentStats),
+        orchestrator_cost_bucket: String(start.cost_bucket ?? "unknown"),
+        orchestrator: String(start.orchestrator ?? args.orchestrator ?? "unknown"),
+        output_tokens: agentStats.reduce((sum, entry) => sum + entry.output_tokens, 0),
+        parallel_stage_count: 0,
+        pending_exchange_count: 0,
+        project_dir: String(start.project_dir ?? args.project_dir ?? EMBEDDED_CWD),
+        project_name: String((start.project_dir ?? args.project_dir ?? EMBEDDED_CWD).split(/[\\\\/]/u).filter(Boolean).pop() ?? "?"),
+        run_id: "",
+        stage_summaries: stageEnds.map((record) => String(record.summary ?? "")).filter((value) => value.length > 0),
+        team_count: Array.isArray(start.team) ? start.team.length : 0,
+        team_preset: String(args.team ?? args.mode ?? "full"),
+        total_agent_calls: agentStats.reduce((sum, entry) => sum + entry.calls, 0),
+        total_elapsed_s: Number(agentStats.reduce((sum, entry) => sum + entry.elapsed_s, 0).toFixed(3)),
+      };
     }
 
     function summarizeEvent(record) {
@@ -521,60 +871,111 @@ function buildHtml(logPath: string | null): string {
     }
 
     function renderRunPicker() {
+      const localRuns = EMBEDDED_INDEX.filter((run) => run.project_dir === EMBEDDED_CWD);
+      const hasLocalRuns = localRuns.length > 0;
+      const hasDebugRuns = EMBEDDED_INDEX.some((run) => run.is_debug);
+      pickerMetaEl.textContent = hasLocalRuns
+        ? formatCount(localRuns.length, "run") + " for this project • " + formatCount(EMBEDDED_INDEX.length, "known run")
+        : formatCount(EMBEDDED_INDEX.length, "known run");
+      filterRowEl.innerHTML = "";
+      if (hasLocalRuns) {
+        const localLabel = document.createElement("label");
+        localLabel.innerHTML = '<input id="filter-projects" type="checkbox"' + (showAllProjects ? " checked" : "") + '> show all projects';
+        filterRowEl.appendChild(localLabel);
+        localLabel.querySelector("input").addEventListener("change", (event) => {
+          showAllProjects = event.target.checked;
+          renderRunPicker();
+        });
+      }
+      if (hasDebugRuns) {
+        const debugLabel = document.createElement("label");
+        debugLabel.innerHTML = '<input id="filter-debug" type="checkbox"' + (showDebugRuns ? " checked" : "") + '> show debug runs';
+        filterRowEl.appendChild(debugLabel);
+        debugLabel.querySelector("input").addEventListener("change", (event) => {
+          showDebugRuns = event.target.checked;
+          renderRunPicker();
+        });
+      }
+
+      let runs = EMBEDDED_INDEX;
+      if (hasLocalRuns && !showAllProjects) {
+        runs = runs.filter((run) => run.project_dir === EMBEDDED_CWD);
+      }
+      if (!showDebugRuns) {
+        runs = runs.filter((run) => !run.is_debug);
+      }
+
       runGridEl.innerHTML = "";
-      if (EMBEDDED_INDEX.length === 0) {
-        runGridEl.innerHTML = '<div class="empty">No runs found. Run kodo first, or open a local log file.</div>';
+      if (runs.length === 0) {
+        runGridEl.innerHTML = '<div class="empty">No runs match the current filters. Adjust the toggles above, run kodo first, or open a local log file.</div>';
         return;
       }
 
-      for (const run of EMBEDDED_INDEX) {
-        const card = document.createElement("article");
-        card.className = "run-card";
-        card.dataset.runId = run.run_id;
-        card.innerHTML =
-          '<div class="row">' +
-            '<div class="title">' + escapeHtml(run.run_id) + '</div>' +
-            '<div class="status ' + (run.finished ? "" : "partial") + '">' +
-              escapeHtml(run.finished ? "done" : ("cycle " + run.completed_cycles + "/" + run.max_cycles)) +
+      const groups = runs.reduce((accumulator, run) => {
+        const day = formatRunDay(run.run_id);
+        (accumulator[day] ??= []).push(run);
+        return accumulator;
+      }, {});
+
+      for (const day of Object.keys(groups).sort((left, right) => left === "Other" ? 1 : right === "Other" ? -1 : left < right ? 1 : -1)) {
+        const section = document.createElement("section");
+        section.className = "run-day";
+        const heading = document.createElement("div");
+        heading.className = "day-heading";
+        heading.textContent = day;
+        section.appendChild(heading);
+        for (const run of groups[day]) {
+          const card = document.createElement("article");
+          card.className = "run-card";
+          card.dataset.runId = run.run_id;
+          card.innerHTML =
+            '<div class="row">' +
+              '<div class="title">' + escapeHtml(formatRunTime(run.run_id)) + '</div>' +
+              '<div class="status ' + (run.finished ? "" : "partial") + '">' +
+                escapeHtml(run.finished ? "done" : ("cycle " + run.completed_cycles + "/" + run.max_cycles)) +
+              '</div>' +
             '</div>' +
-          '</div>' +
-          '<p class="goal">' + escapeHtml((run.goal || "").trim() || "(no goal captured)") + '</p>' +
-          '<div class="kv">' +
-            '<div>' + escapeHtml(run.project_name) + ' • ' + escapeHtml(run.orchestrator) + ' • ' + escapeHtml(run.model) + '</div>' +
-            '<div>' + escapeHtml(String(run.total_agent_calls)) + ' agent calls • in ' + escapeHtml(String(run.input_tokens)) + ' • out ' + escapeHtml(String(run.output_tokens)) + ' • errors ' + escapeHtml(String(run.error_count)) + ' • conversations ' + escapeHtml(String(run.conversation_count)) + '</div>' +
-            '<div>' + escapeHtml(run.log_file) + (run.is_debug ? ' • debug' : '') + '</div>' +
-          '</div>';
-        card.addEventListener("click", () => {
-          void loadRunById(run.run_id);
-        });
-        runGridEl.appendChild(card);
+            '<p class="goal">' + escapeHtml((run.goal || "").trim() || "(no goal captured)") + '</p>' +
+            '<div class="metric-row">' +
+              '<span class="pill">' + escapeHtml(run.project_name) + '</span>' +
+              '<span class="pill">' + escapeHtml(run.orchestrator) + " / " + escapeHtml(run.model) + '</span>' +
+              '<span class="pill">' + escapeHtml(formatBucket(run.orchestrator_cost_bucket)) + '</span>' +
+              '<span class="pill">' + escapeHtml(formatCount(run.total_agent_calls, "agent call")) + '</span>' +
+              (run.is_debug ? '<span class="pill">debug</span>' : "") +
+            '</div>' +
+            '<div class="kv">' +
+              '<div>' + escapeHtml(run.run_id) + " • " + escapeHtml(formatSeconds(run.total_elapsed_s)) + " elapsed • in " + escapeHtml(String(run.input_tokens)) + " • out " + escapeHtml(String(run.output_tokens)) + " • errors " + escapeHtml(String(run.error_count)) + '</div>' +
+              '<div>' + escapeHtml(formatCount(run.conversation_count, "conversation capture")) + " • " + escapeHtml(formatCount(run.completed_stage_count, "completed stage")) + " • pending exchanges " + escapeHtml(String(run.pending_exchange_count)) + '</div>' +
+              '<div>' + escapeHtml(run.last_summary || run.log_file) + '</div>' +
+            '</div>';
+          card.addEventListener("click", () => {
+            void loadRunById(run.run_id);
+          });
+          section.appendChild(card);
+        }
+        runGridEl.appendChild(section);
       }
     }
 
-    function renderSummary(events, tree) {
+    function renderSummary(events, tree, runMeta) {
       const args = tree.header.cli_args || {};
       const start = tree.header.run_start || {};
       const runEnd = tree.runEnd || {};
       const completedCycles = events.filter((record) => record.event === "cycle_end").length;
       const completedStages = events.filter((record) => record.event === "stage_end" && record.finished).length;
       const toolCalls = events.filter((record) => record.event === "orchestrator_tool_call").length;
-      const agentRuns = events.filter((record) => record.event === "agent_run_end");
-      const inputTokens = agentRuns.reduce((sum, record) => sum + (typeof record.input_tokens === "number" ? record.input_tokens : 0), 0);
-      const outputTokens = agentRuns.reduce((sum, record) => sum + (typeof record.output_tokens === "number" ? record.output_tokens : 0), 0);
-      const errorCount = agentRuns.filter((record) => record.is_error === true).length;
-      const conversationCount = agentRuns.filter((record) => typeof record.conversation_log === "string").length;
-      const goal = String(start.goal ?? args.goal_text ?? "").trim() || "(no goal captured)";
+      const goal = String(runMeta.goal ?? start.goal ?? args.goal_text ?? "").trim() || "(no goal captured)";
 
       summaryGridEl.innerHTML = "";
       const entries = [
         ["Goal", goal],
-        ["Project", String(start.project_dir ?? args.project_dir ?? EMBEDDED_CWD)],
-        ["Orchestrator", String(start.orchestrator ?? args.orchestrator ?? "unknown") + " • " + String(start.model ?? args.orchestrator_model ?? "unknown")],
+        ["Project", String(runMeta.project_dir ?? start.project_dir ?? args.project_dir ?? EMBEDDED_CWD)],
+        ["Orchestrator", String(runMeta.orchestrator ?? start.orchestrator ?? args.orchestrator ?? "unknown") + " • " + String(runMeta.model ?? start.model ?? args.orchestrator_model ?? "unknown")],
         ["Run Stats", completedCycles + " cycles • " + completedStages + " stages • " + toolCalls + " tool calls"],
-        ["Accounting", agentRuns.length + " agent calls • in " + inputTokens + " • out " + outputTokens + " • errors " + errorCount],
-        ["Artifacts", conversationCount + " conversation capture(s) • bucket " + String(start.cost_bucket ?? "unknown")],
-        ["Status", runEnd.finished ? "completed" : (events.length > 0 ? "in progress / partial" : "empty log")],
-        ["Summary", String(runEnd.summary ?? events.findLast((record) => record.event === "cycle_end")?.summary ?? "No summary captured")],
+        ["Accounting", runMeta.total_agent_calls + " agent calls • in " + runMeta.input_tokens + " • out " + runMeta.output_tokens + " • errors " + runMeta.error_count],
+        ["Artifacts", runMeta.conversation_count + " conversation capture(s) • bucket " + formatBucket(runMeta.orchestrator_cost_bucket)],
+        ["Status", runMeta.finished || runEnd.finished ? "completed" : (events.length > 0 ? "in progress / partial" : "empty log")],
+        ["Summary", String(runMeta.last_summary || runEnd.summary || events.findLast((record) => record.event === "cycle_end")?.summary || "No summary captured")],
       ];
 
       for (const [label, value] of entries) {
@@ -582,6 +983,87 @@ function buildHtml(logPath: string | null): string {
         card.className = "summary-box";
         card.innerHTML = "<strong>" + escapeHtml(label) + "</strong><div>" + escapeHtml(value) + "</div>";
         summaryGridEl.appendChild(card);
+      }
+    }
+
+    function renderAccounting(runMeta) {
+      accountingListEl.innerHTML = "";
+      const bucketStats = runMeta.orchestrator_bucket_breakdown?.length > 0
+        ? runMeta.orchestrator_bucket_breakdown
+        : buildBucketStats(runMeta.agent_stats || []);
+      if (bucketStats.length > 0) {
+        for (const bucket of bucketStats) {
+          const item = document.createElement("div");
+          item.className = "detail-item";
+          item.innerHTML =
+            "<strong>" + escapeHtml(formatBucket(bucket.cost_bucket)) + "</strong>" +
+            "<span>" +
+            escapeHtml(formatCount(bucket.calls, "call")) +
+            " • in " + escapeHtml(String(bucket.input_tokens)) +
+            " • out " + escapeHtml(String(bucket.output_tokens)) +
+            " • " + escapeHtml(formatSeconds(bucket.elapsed_s)) +
+            " • errors " + escapeHtml(String(bucket.error_count)) +
+            " • conversations " + escapeHtml(String(bucket.conversation_count)) +
+            "</span>";
+          accountingListEl.appendChild(item);
+        }
+      }
+
+      const agentStats = runMeta.agent_stats || [];
+      if (agentStats.length === 0) {
+        accountingListEl.innerHTML = '<div class="empty">No agent accounting was found in this log.</div>';
+        return;
+      }
+      for (const stat of agentStats) {
+        const item = document.createElement("div");
+        item.className = "detail-item";
+        item.innerHTML =
+          "<strong>" + escapeHtml(stat.agent) + "</strong>" +
+          "<span>" +
+          escapeHtml(formatBucket(stat.cost_bucket)) +
+          " • " + escapeHtml(formatCount(stat.calls, "call")) +
+          " • in " + escapeHtml(String(stat.input_tokens)) +
+          " • out " + escapeHtml(String(stat.output_tokens)) +
+          " • " + escapeHtml(formatSeconds(stat.elapsed_s)) +
+          " • errors " + escapeHtml(String(stat.error_count)) +
+          " • conversations " + escapeHtml(String(stat.conversation_count)) +
+          "</span>";
+        accountingListEl.appendChild(item);
+      }
+    }
+
+    function renderArtifacts(runMeta) {
+      artifactsListEl.innerHTML = "";
+      artifactFilesEl.innerHTML = "";
+      artifactFilesEl.classList.add("hidden");
+
+      const items = [
+        ["Run ID", runMeta.run_id || "(local file)"],
+        ["Log File", runMeta.log_file || INITIAL_LOG_PATH || "(browser-loaded file)"],
+        ["Team", runMeta.team_count > 0 ? runMeta.team_preset + " • " + formatCount(runMeta.team_count, "agent") : runMeta.team_preset || "unknown"],
+        ["Stages", runMeta.has_stages ? formatCount(runMeta.completed_stage_count, "completed stage") + " • current stage cycles " + runMeta.current_stage_cycles : "no staged execution captured"],
+        ["Pending Work", runMeta.pending_exchange_count > 0 ? formatCount(runMeta.pending_exchange_count, "pending exchange") : "no pending exchanges captured"],
+        ["Parallel State", runMeta.parallel_stage_count > 0 ? formatCount(runMeta.parallel_stage_count, "parallel stage group") : "no parallel stage state captured"],
+      ];
+      if (runMeta.stage_summaries?.length > 0) {
+        items.push(["Stage Summaries", runMeta.stage_summaries.join(" | ")]);
+      }
+
+      for (const [label, value] of items) {
+        const item = document.createElement("div");
+        item.className = "detail-item";
+        item.innerHTML = "<strong>" + escapeHtml(label) + "</strong><span>" + escapeHtml(value) + "</span>";
+        artifactsListEl.appendChild(item);
+      }
+
+      if (runMeta.conversation_logs?.length > 0) {
+        artifactFilesEl.classList.remove("hidden");
+        for (const artifact of runMeta.conversation_logs) {
+          const entry = document.createElement("div");
+          entry.className = "artifact-item";
+          entry.textContent = artifact;
+          artifactFilesEl.appendChild(entry);
+        }
       }
     }
 
@@ -605,9 +1087,12 @@ function buildHtml(logPath: string | null): string {
       target.appendChild(list);
     }
 
-    function renderTimeline(events) {
+    function renderTimeline(events, embeddedMeta) {
       const tree = buildTree(events);
-      renderSummary(events, tree);
+      const runMeta = deriveRunMeta(events, embeddedMeta);
+      renderSummary(events, tree, runMeta);
+      renderAccounting(runMeta);
+      renderArtifacts(runMeta);
       timelineEl.innerHTML = "";
 
       if (events.length === 0) {
@@ -677,7 +1162,7 @@ function buildHtml(logPath: string | null): string {
           .flatMap((line) => {
             try { return [JSON.parse(line)]; } catch { return []; }
           });
-        showLogView(events, runId);
+        showLogView(events, runId, EMBEDDED_INDEX.find((candidate) => candidate.run_id === runId) || null);
       } catch {
         const run = EMBEDDED_INDEX.find((candidate) => candidate.run_id === runId);
         const message = run?.log_file
@@ -687,7 +1172,8 @@ function buildHtml(logPath: string | null): string {
       }
     }
 
-    function showLogView(events, runId) {
+    function showLogView(events, runId, runMeta = null) {
+      currentRunMeta = runMeta;
       const inferredTitle = runId ? "kodo log viewer — " + runId : INITIAL_TITLE;
       titleEl.textContent = inferredTitle;
       metaEl.textContent = [
@@ -698,10 +1184,11 @@ function buildHtml(logPath: string | null): string {
       pickerEl.classList.add("hidden");
       viewerEl.classList.remove("hidden");
       backBtnEl.classList.toggle("hidden", EMBEDDED_INDEX.length === 0);
-      renderTimeline(events);
+      renderTimeline(events, runMeta);
     }
 
     function showPicker() {
+      currentRunMeta = null;
       titleEl.textContent = INITIAL_TITLE;
       metaEl.textContent = [
         INITIAL_LOG_PATH || "",
@@ -755,7 +1242,7 @@ function buildHtml(logPath: string | null): string {
         return;
       }
       traceBoxEl.classList.remove("hidden");
-      traceBoxEl.textContent = "KODO_TRACE_UPLOAD is enabled for this viewer session. Run artifacts are expected to be upload-capable in orchestrator flows.";
+      traceBoxEl.textContent = "Runtime trace upload support is enabled for this viewer session. New orchestrator runs can upload run archives when credentials are available; older logs only display the accounting and artifact data already captured on disk.";
     }
 
     backBtnEl.addEventListener("click", () => {
@@ -768,7 +1255,7 @@ function buildHtml(logPath: string | null): string {
     bindLocalFilePicker();
 
     if (EMBEDDED_DATA.length > 0) {
-      showLogView(EMBEDDED_DATA, INITIAL_LOG_PATH || "embedded log");
+      showLogView(EMBEDDED_DATA, INITIAL_LOG_PATH || "embedded log", null);
     } else {
       showPicker();
     }

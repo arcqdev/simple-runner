@@ -17,6 +17,7 @@
     "lint:fix": "oxlint src test vite.config.ts --type-aware --import-plugin --node-plugin --vitest-plugin --fix",
     "start": "node dist/cli.js",
     "test": "vitest run",
+    "test:viewer-browser": "vite-node scripts/verify-viewer-browser.ts",
     "test:watch": "vitest",
     "typecheck": "tsgo --noEmit"
   },
@@ -26,6 +27,7 @@
     "oxfmt": "^0.41.0",
     "oxlint": "^1.56.0",
     "oxlint-tsgolint": "^0.17.1",
+    "playwright": "^1.58.2",
     "typescript": "^5.9.2",
     "vite": "^7.1.5",
     "vite-node": "^3.2.4",
