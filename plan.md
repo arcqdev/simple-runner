@@ -64,14 +64,11 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 5. Verification And Done Semantics
 
-- Verification is reduced.
-  - Missing Python’s richer verification modes such as full, skip, and quick-check behavior.
-  - Missing reset-on-first-attempt verification semantics.
-  - Missing fresh-worker fallback verification behavior.
-  - Missing richer verifier dictionaries and stage-specific verification control.
-- Done-signal handling is reduced.
-  - TypeScript currently depends on parsing textual markers such as `GOAL_DONE`, `END_CYCLE`, and `RAISE_ISSUE`.
-  - Missing Python’s richer structured done-signal handling and normalization logic.
+- Verification and done semantics now cover the Python-equivalent normal paths.
+  - Full, skip, and quick-check verification modes are available.
+  - First-attempt verifier reset and fresh-worker fallback verification are present.
+  - Stage-specific verification control and browser-verifier gating are wired through execution.
+  - Done handling now normalizes structured signals in addition to legacy text markers.
 
 ### 6. Git Worktree Isolation
 

@@ -81,6 +81,14 @@ type GoalPlanStage = {
   browser_testing?: boolean;
   parallel_group?: number | null;
   persist_changes?: boolean;
+  verification?:
+    | "full"
+    | "skip"
+    | Array<{
+        description: string;
+        error_message: string;
+        path: string;
+      }>;
 };
 
 export type SpecializedGoalPlan = {
@@ -249,6 +257,13 @@ export function buildImproveFallbackPlan(
           simplificationFindings +
           "`.\n\n### F<n>: <title>\n- **File:** <file>:<line>\n- **Category:** simplification | usability | architecture | dead-code | security | performance\n- **Impact:** <who benefits and how — users, contributors, or both>\n- **Evidence:** <concrete proof: code snippet, example, or comparison>\n- **Proposed change:** <what to do, with enough detail to act on>",
         acceptance_criteria: `Findings at ${simplificationFindings} with concrete proposals.`,
+        verification: [
+          {
+            description: "Simplification findings file",
+            error_message: "Missing simplification findings.",
+            path: simplificationFindings,
+          },
+        ],
       },
       {
         index: 2,
@@ -259,6 +274,13 @@ export function buildImproveFallbackPlan(
           usabilityFindings +
           "`.\n\n### F<n>: <title>\n- **File:** <file>:<line>\n- **Category:** simplification | usability | architecture | dead-code | security | performance\n- **Impact:** <who benefits and how — users, contributors, or both>\n- **Evidence:** <concrete proof: code snippet, example, or comparison>\n- **Proposed change:** <what to do, with enough detail to act on>",
         acceptance_criteria: `Findings at ${usabilityFindings} with concrete proposals.`,
+        verification: [
+          {
+            description: "Usability findings file",
+            error_message: "Missing usability findings.",
+            path: usabilityFindings,
+          },
+        ],
       },
       {
         index: 3,
@@ -269,6 +291,13 @@ export function buildImproveFallbackPlan(
           architectureFindings +
           "`.\n\n### F<n>: <title>\n- **File:** <file>:<line>\n- **Category:** simplification | usability | architecture | dead-code | security | performance\n- **Impact:** <who benefits and how — users, contributors, or both>\n- **Evidence:** <concrete proof: code snippet, example, or comparison>\n- **Proposed change:** <what to do, with enough detail to act on>",
         acceptance_criteria: `Findings at ${architectureFindings} with concrete proposals.`,
+        verification: [
+          {
+            description: "Architecture findings file",
+            error_message: "Missing architecture findings.",
+            path: architectureFindings,
+          },
+        ],
       },
       {
         index: 4,
@@ -277,12 +306,20 @@ export function buildImproveFallbackPlan(
           `Skeptically verify each finding. Read the actual code at the cited location. Default to \`skip\` — most findings don't survive scrutiny.\n\nFor each finding, ask:\n- Is this actually a problem, or does it serve a purpose I'm missing?\n- Would the proposed change make things genuinely better, or just different?\n- Is the impact worth the churn?\n\nWrite \`${triagePath}\`:\n\n### F<n>: <title>\n- **Verdict:** fix | skip | needs-decision\n- **Reason:** <1-2 sentences>\n\nFindings files: \`${simplificationFindings}\`, \`${usabilityFindings}\`, \`${architectureFindings}\`.` +
           priorNeedsDecision,
         acceptance_criteria: `Every finding has a verdict in ${triagePath}.`,
+        verification: [
+          {
+            description: "Triage results file",
+            error_message: "Missing triage results.",
+            path: triagePath,
+          },
+        ],
       },
       {
         index: 5,
         name: "Fix & Report",
         description: `Act only on \`fix\` and \`needs-decision\` from \`${triagePath}\`. Ignore \`skip\`.\n\nOriginal findings: \`${simplificationFindings}\`, \`${usabilityFindings}\`, \`${architectureFindings}\`.\n\nAuto-fix safe issues, flag ambiguous ones. Write report to \`${reportPath}\`:\n\n${IMPROVE_REPORT_FORMAT}\n\nCommit auto-fixes: "chore: auto-fix issues found by kodo improve".`,
         acceptance_criteria: `Report at ${reportPath}. Auto-fixes committed. Only triage-approved findings acted on.`,
+        verification: "full",
       },
     ],
   };
@@ -325,6 +362,18 @@ export function buildTestFallbackPlan(
           reconPath +
           "`.\n\nSpend no more than 15% of total effort here. Get the software running, then start testing.",
         acceptance_criteria: `Software installed and running. Feature map in ${coverageFile}. Discovery notes at ${reconPath}.`,
+        verification: [
+          {
+            description: "Feature coverage file",
+            error_message: "Missing feature coverage file.",
+            path: coverageFile,
+          },
+          {
+            description: "Discovery notes file",
+            error_message: "Missing discovery notes.",
+            path: reconPath,
+          },
+        ],
       },
       {
         index: 2,
@@ -333,6 +382,13 @@ export function buildTestFallbackPlan(
         parallel_group: 1,
         description: `Exercise every user-facing feature end-to-end. Follow documented workflows, try the examples from the README, use every CLI command and flag. Test both happy paths and common error cases.\n\nWrite findings to \`${findingsWorkflows}\`.\n\n### F<n>: <title>\n- **Workflow:** <feature or user workflow>\n- **Severity:** critical | medium | low\n- **Category:** crash | data-loss | silent-wrong | hang | race | leak | misleading-output | install-failure | usability\n- **Repro steps:**\n  1. <step>\n  2. <what happens vs what should happen>\n- **Root cause:** <if known>`,
         acceptance_criteria: `Findings with repro steps at ${findingsWorkflows}, or detailed explanation of features tested and why they passed.`,
+        verification: [
+          {
+            description: "Core workflow findings file",
+            error_message: "Missing core workflow findings.",
+            path: findingsWorkflows,
+          },
+        ],
       },
       {
         index: 3,
@@ -341,6 +397,13 @@ export function buildTestFallbackPlan(
         parallel_group: 1,
         description: `Probe edge cases and error handling across all features. Try empty inputs, huge inputs, invalid types, missing files, bad configs, unicode edge cases, concurrent usage. Test every error path — are messages helpful? Does it recover or corrupt state?\n\nWrite findings to \`${findingsEdgeCases}\`.\n\n### F<n>: <title>\n- **Workflow:** <feature or user workflow>\n- **Severity:** critical | medium | low\n- **Category:** crash | data-loss | silent-wrong | hang | race | leak | misleading-output | install-failure | usability\n- **Repro steps:**\n  1. <step>\n  2. <what happens vs what should happen>\n- **Root cause:** <if known>`,
         acceptance_criteria: `Findings with repro steps at ${findingsEdgeCases}, or detailed explanation of edge cases tested and why they passed.`,
+        verification: [
+          {
+            description: "Edge case findings file",
+            error_message: "Missing edge case findings.",
+            path: findingsEdgeCases,
+          },
+        ],
       },
       {
         index: 4,
@@ -348,6 +411,7 @@ export function buildTestFallbackPlan(
         persist_changes: true,
         description: `For each confirmed bug from \`${findingsWorkflows}\` and \`${findingsEdgeCases}\`:\n1. Write a test that reproduces the bug — verify it fails\n2. Fix the code\n3. Verify the test now passes\n\nCommit test and fix separately:\n- "test: add regression test for F<n> (kodo test)"\n- "fix: <description> (kodo test)"\n\nUpdate feature coverage in \`${coverageFile}\`. Run the full test suite.\n\nWrite report to \`${reportPath}\`:\n\n${TEST_REPORT_FORMAT}`,
         acceptance_criteria: `Report at ${reportPath} with findings, feature coverage, and self-critique. Regression tests committed. Suite passes.`,
+        verification: "full",
       },
     ],
   };

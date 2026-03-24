@@ -50,6 +50,7 @@ type GoalStage = {
   name: string;
   parallel_group?: number | null;
   persist_changes?: boolean;
+  verification?: VerificationMode;
 };
 
 type GoalPlan = {
@@ -65,6 +66,8 @@ type RuntimeAgent = {
 
 type AgentCollection = {
   allAgents: RuntimeAgent[];
+  browserReviewerAgents: RuntimeAgent[];
+  standardReviewerAgents: RuntimeAgent[];
   reviewerAgents: RuntimeAgent[];
   workerAgents: RuntimeAgent[];
 };
@@ -73,6 +76,22 @@ type ParsedDirective = {
   explicit: boolean;
   summary: string;
   terminal: "end_cycle" | "goal_done" | "raise_issue";
+};
+
+type DoneSignal = ParsedDirective & {
+  source: "implicit" | "json" | "marker";
+};
+
+type QuickCheck = {
+  description: string;
+  error_message: string;
+  path: string;
+};
+
+type VerificationMode = "full" | "skip" | QuickCheck[];
+
+type VerificationState = {
+  doneAttempt: number;
 };
 
 type WorkerCycleOutcome = {
@@ -152,14 +171,23 @@ export type RuntimeOrchestrator =
   | CursorCliRuntimeOrchestrator
   | GeminiCliRuntimeOrchestrator;
 
-const DONE_ACCEPT = /(ALL CHECKS PASS|MINOR ISSUES FIXED)/iu;
-const DONE_REJECT = /(NOT ALL CHECKS PASS|NOT MINOR ISSUES FIXED)/iu;
 const GIT_AUTHOR_ENV = {
   GIT_AUTHOR_EMAIL: "noreply@github.com",
   GIT_AUTHOR_NAME: "kodo",
   GIT_COMMITTER_EMAIL: "noreply@github.com",
   GIT_COMMITTER_NAME: "kodo",
 };
+
+const SIGNAL = "(?:ALL CHECKS PASS|MINOR ISSUES FIXED)";
+const RE_FENCED_CODE = /```.*?```/gsu;
+const RE_INLINE_CODE = /`[^`]+`/gu;
+const RE_SINGLE_QUOTED = new RegExp(`'[^']*${SIGNAL}[^']*'`, "gu");
+const RE_DOUBLE_QUOTED = new RegExp(`"[^"]*${SIGNAL}[^"]*"`, "gu");
+const RE_SIGNAL = new RegExp(SIGNAL, "u");
+const RE_SIGNAL_AUTHORITATIVE = new RegExp(
+  String.raw`(?:^|(?<=\.)|(?<=!)|(?<=\?)|(?<=\u3002))\s*(?:[*_]{1,3})?${SIGNAL}(?::|\b)`,
+  "mu",
+);
 
 function fallbackWorkerBackend(orchestrator: string): TeamAgentConfig["backend"] {
   switch (orchestrator) {
@@ -466,14 +494,107 @@ function composeStageGoal(plan: GoalPlan, stage: GoalStage, completedSummaries: 
   return parts.join("\n\n");
 }
 
-function parseDoneDirective(text: string): ParsedDirective {
+function normalizeTerminal(value: string): ParsedDirective["terminal"] | null {
+  const normalized = value.trim().toLowerCase().replace(/[-\s]+/gu, "_");
+  if (normalized === "goal_done" || normalized === "done" || normalized === "complete") {
+    return "goal_done";
+  }
+  if (normalized === "end_cycle" || normalized === "continue") {
+    return "end_cycle";
+  }
+  if (normalized === "raise_issue" || normalized === "issue" || normalized === "fail") {
+    return "raise_issue";
+  }
+  return null;
+}
+
+function recordField(
+  value: Record<string, unknown> | null,
+  keys: string[],
+): string | boolean | Record<string, unknown> | null {
+  if (value === null) {
+    return null;
+  }
+  for (const key of keys) {
+    if (!(key in value)) {
+      continue;
+    }
+    const candidate = value[key];
+    if (
+      typeof candidate === "string" ||
+      typeof candidate === "boolean" ||
+      (typeof candidate === "object" && candidate !== null && !Array.isArray(candidate))
+    ) {
+      return candidate as string | boolean | Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+function parseJsonDoneSignal(text: string): DoneSignal | null {
   const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const root =
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    const doneRootValue = recordField(root, ["done_signal", "doneSignal", "done"]);
+    const doneRoot =
+      typeof doneRootValue === "object" && doneRootValue !== null
+        ? (doneRootValue as Record<string, unknown>)
+        : root;
+    if (doneRoot === null) {
+      return null;
+    }
+
+    const terminalField = recordField(doneRoot, ["terminal", "status", "type"]);
+    const summaryField = recordField(doneRoot, ["summary", "message", "result"]);
+    const successField = recordField(doneRoot, ["success"]);
+    const terminal =
+      typeof terminalField === "string"
+        ? normalizeTerminal(terminalField)
+        : typeof successField === "boolean"
+          ? successField
+            ? "goal_done"
+            : "raise_issue"
+          : null;
+    if (terminal === null) {
+      return null;
+    }
+
+    const summary =
+      typeof summaryField === "string" && summaryField.trim().length > 0
+        ? summaryField.trim()
+        : trimmed;
+    return {
+      explicit: true,
+      source: "json",
+      summary,
+      terminal,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseDoneDirective(text: string): DoneSignal {
+  const trimmed = text.trim();
+  const jsonSignal = parseJsonDoneSignal(trimmed);
+  if (jsonSignal !== null) {
+    return jsonSignal;
+  }
   const lines = trimmed.split(/\r?\n/gu).map((line) => line.trim());
   for (const line of lines) {
     if (line.startsWith("GOAL_DONE:")) {
       const summary = trimmed.replace(/^GOAL_DONE:\s*/u, "").trim();
       return {
         explicit: true,
+        source: "marker",
         summary: summary.length > 0 ? summary : trimmed,
         terminal: "goal_done",
       };
@@ -482,6 +603,7 @@ function parseDoneDirective(text: string): ParsedDirective {
       const summary = trimmed.replace(/^END_CYCLE:\s*/u, "").trim();
       return {
         explicit: true,
+        source: "marker",
         summary: summary.length > 0 ? summary : trimmed,
         terminal: "end_cycle",
       };
@@ -490,12 +612,18 @@ function parseDoneDirective(text: string): ParsedDirective {
       const summary = trimmed.replace(/^RAISE_ISSUE:\s*/u, "").trim();
       return {
         explicit: true,
+        source: "marker",
         summary: summary.length > 0 ? summary : trimmed,
         terminal: "raise_issue",
       };
     }
   }
-  return { explicit: false, summary: trimmed, terminal: "end_cycle" };
+  return {
+    explicit: false,
+    source: "implicit",
+    summary: trimmed,
+    terminal: "end_cycle",
+  };
 }
 
 function buildWorkerPrompt(
@@ -531,20 +659,44 @@ function buildVerificationPrompt(
   goal: string,
   summary: string,
   acceptanceCriteria?: string,
+  effort: ResolvedRuntimeParams["effort"] = "standard",
 ): string {
+  const effortSupplement =
+    effort === "high"
+      ? [
+          "",
+          "Effort level is HIGH. Be thorough: verify each criterion with real evidence.",
+        ]
+      : effort === "max"
+        ? [
+            "",
+            "Effort level is MAX. Challenge assumptions aggressively and demand strong evidence before accepting completion.",
+          ]
+        : [];
+
   return [
-    "The implementation agent claims this work is complete.",
+    "The orchestrator claims the following goal is complete:",
     "",
     "# Goal",
     goal,
     "",
-    "# Claimed Summary",
+    "# Orchestrator's summary",
     summary,
-    ...(acceptanceCriteria ? ["", "# Acceptance Criteria", acceptanceCriteria] : []),
     "",
     "Verify the repository state honestly.",
-    "If the work is acceptable, include ALL CHECKS PASS.",
+    ...(acceptanceCriteria
+      ? [
+          "Check every acceptance criterion with concrete evidence from the repository or runtime behavior.",
+          "For each criterion, determine PASS or FAIL before giving the final verdict.",
+          "",
+          "## Acceptance Criteria",
+          acceptanceCriteria,
+          "",
+          "Do NOT say ALL CHECKS PASS unless every criterion passes.",
+        ]
+      : ["If the work is acceptable, include ALL CHECKS PASS."]),
     "If there are issues, explain them clearly and do not include the pass signal.",
+    ...effortSupplement,
   ].join("\n");
 }
 
@@ -652,39 +804,112 @@ function collectRuntimeAgents(
     }
   }
 
-  const reviewerAgents = [
-    ...groups.testerNames,
-    ...groups.browserTesterNames,
-    ...groups.reviewerNames,
-  ]
+  const standardReviewerAgents = [...groups.testerNames, ...groups.reviewerNames]
     .map((name) => runtimeAgents.get(name))
     .filter((agent): agent is RuntimeAgent => agent !== undefined);
+  const browserReviewerAgents = groups.browserTesterNames
+    .map((name) => runtimeAgents.get(name))
+    .filter((agent): agent is RuntimeAgent => agent !== undefined);
+  const reviewerAgents = [...standardReviewerAgents, ...browserReviewerAgents];
 
   return {
     allAgents: [
       ...runtimeAgents.values(),
       ...workerAgents.filter((agent) => !runtimeAgents.has(agent.name)),
     ],
+    browserReviewerAgents,
     reviewerAgents,
+    standardReviewerAgents,
     workerAgents,
   };
 }
 
-function verificationPassed(report: string): boolean {
-  return DONE_ACCEPT.test(report) && !DONE_REJECT.test(report);
+function defaultVerificationState(): VerificationState {
+  return { doneAttempt: 0 };
+}
+
+export function verificationPassed(report: string): boolean {
+  const upper = report.toUpperCase();
+  if (upper.includes("NOT ALL CHECKS PASS") || upper.includes("NOT MINOR ISSUES FIXED")) {
+    return false;
+  }
+
+  let stripped = upper.replace(RE_FENCED_CODE, "");
+  stripped = stripped.replace(RE_INLINE_CODE, "");
+  stripped = stripped.replace(RE_SINGLE_QUOTED, "");
+  stripped = stripped.replace(RE_DOUBLE_QUOTED, "");
+
+  if (!RE_SIGNAL.test(stripped)) {
+    return false;
+  }
+
+  return RE_SIGNAL_AUTHORITATIVE.test(stripped);
+}
+
+function resolveQuickCheckPath(check: QuickCheck, runDir: RunDir): string {
+  return check.path.replaceAll("{run_dir}", runDir.root);
+}
+
+function runQuickChecks(checks: QuickCheck[], runDir: RunDir): string | null {
+  const failures = checks
+    .map((check) => ({
+      ...check,
+      path: resolveQuickCheckPath(check, runDir),
+    }))
+    .filter((check) => !existsSync(check.path))
+    .map((check) => `- ${check.description}: ${check.error_message}`);
+
+  if (failures.length === 0) {
+    return null;
+  }
+
+  return [
+    "Quick-check verification failed:",
+    ...failures,
+    "",
+    "Fix these issues and try calling done again.",
+  ].join("\n");
+}
+
+function verificationPromptLabel(agentName: string): string {
+  return agentName.replaceAll("_", " ").replace(/\b\w/gu, (match) => match.toUpperCase());
+}
+
+function fallbackVerifier(workerAgents: RuntimeAgent[], allAgents: RuntimeAgent[]): RuntimeAgent | null {
+  return (
+    workerAgents.find((agent) => agent.name === "worker_smart") ??
+    workerAgents.find((agent) => agent.name === "worker") ??
+    workerAgents[0] ??
+    allAgents[0] ??
+    null
+  );
 }
 
 function runVerification(
-  agents: RuntimeAgent[],
+  allAgents: RuntimeAgent[],
+  standardReviewerAgents: RuntimeAgent[],
+  browserReviewerAgents: RuntimeAgent[],
+  workerAgents: RuntimeAgent[],
   goal: string,
   summary: string,
-  projectDir: string,
+  runDir: RunDir,
   cycleIndex: number,
-  acceptanceCriteria?: string,
+  verificationState: VerificationState,
+  options: {
+    acceptanceCriteria?: string;
+    browserTesting?: boolean;
+    effort?: ResolvedRuntimeParams["effort"];
+    mode?: VerificationMode;
+  } = {},
 ): string | null {
+  const mode = options.mode ?? "full";
   const issues: string[] = [];
-  if (agents.length === 0) {
+
+  if (mode === "skip") {
     return null;
+  }
+  if (Array.isArray(mode)) {
+    return runQuickChecks(mode, runDir);
   }
 
   emitLogEvent("orchestrator_done_attempt", {
@@ -692,11 +917,26 @@ function runVerification(
     summary,
   });
 
-  const prompt = buildVerificationPrompt(goal, summary, acceptanceCriteria);
+  verificationState.doneAttempt += 1;
+  const resetSession = verificationState.doneAttempt === 1;
+  const prompt = buildVerificationPrompt(
+    goal,
+    summary,
+    options.acceptanceCriteria,
+    options.effort,
+  );
+  const agents = [
+    ...standardReviewerAgents,
+    ...(options.browserTesting ? browserReviewerAgents : []),
+  ];
+
   for (const agent of agents) {
+    if (resetSession) {
+      agent.session.reset();
+    }
     const response = agent.session.query(prompt, {
       maxTurns: agent.config.max_turns ?? 8,
-      projectDir,
+      projectDir: runDir.projectDir,
     });
     emitLogEvent("done_verification", {
       agent: agent.name,
@@ -707,11 +947,47 @@ function runVerification(
       status: response.isError ? "failed" : "completed",
     });
     if (response.isError || !verificationPassed(response.text)) {
-      issues.push(`**${agent.name} found issues:**\n${response.text.slice(0, 3000)}`);
+      issues.push(`**${verificationPromptLabel(agent.name)} found issues:**\n${response.text.slice(0, 3000)}`);
     }
   }
 
-  return issues.length > 0 ? issues.join("\n\n") : null;
+  if (agents.length === 0) {
+    const fallback = fallbackVerifier(workerAgents, allAgents);
+    if (fallback !== null) {
+      const verifier = fallback.session.clone();
+      try {
+        const response = verifier.query(prompt, {
+          maxTurns: fallback.config.max_turns ?? 8,
+          projectDir: runDir.projectDir,
+        });
+        emitLogEvent("done_verification", {
+          agent: fallback.name,
+          report: response.text.slice(0, 5000),
+        });
+        emitLogEvent("agent_run_end", {
+          agent: fallback.name,
+          status: response.isError ? "failed" : "completed",
+        });
+        if (response.isError || !verificationPassed(response.text)) {
+          issues.push(
+            `**${fallback.name} (verifier) found issues:**\n${response.text.slice(0, 3000)}`,
+          );
+        }
+      } finally {
+        verifier.close();
+      }
+    }
+  }
+
+  return issues.length > 0
+    ? [
+        `DONE REJECTED (attempt ${verificationState.doneAttempt}) — verification found issues that must be fixed:`,
+        "",
+        issues.join("\n\n"),
+        "",
+        "Fix these issues and try calling done again.",
+      ].join("\n")
+    : null;
 }
 
 function runGit(
@@ -996,6 +1272,8 @@ abstract class RuntimeOrchestratorBase {
       state,
       stage.acceptance_criteria,
       `${stage.index}/${effectivePlan.stages.length}: ${stage.name}`,
+      stage.browser_testing,
+      stage.verification,
     );
     const summary = result.summary;
     if (!result.finished) {
@@ -1032,7 +1310,7 @@ abstract class RuntimeOrchestratorBase {
     plan: GoalPlan,
     group: GoalStage[],
   ): OrchestrationResult {
-    const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(
+    const { allAgents, browserReviewerAgents, standardReviewerAgents, workerAgents } = collectRuntimeAgents(
       runDir,
       params,
       flags,
@@ -1070,6 +1348,7 @@ abstract class RuntimeOrchestratorBase {
     try {
       const maxParallelCycles = Math.max(1, params.maxCycles - state.completedCycles);
       let groupCyclesUsed = 0;
+      const verificationState = defaultVerificationState();
 
       while (groupCyclesUsed < maxParallelCycles && stageRuntimes.some((stage) => !stage.finished)) {
         const activeStages = stageRuntimes.filter((stage) => !stage.finished);
@@ -1117,12 +1396,21 @@ abstract class RuntimeOrchestratorBase {
 
           if (outcome.directive.terminal === "goal_done" && !queryResult.isError) {
             const verificationIssues = runVerification(
-              reviewerAgents,
+              allAgents,
+              standardReviewerAgents,
+              browserReviewerAgents,
+              workerAgents,
               stageRuntime.goalText,
               stageSummary,
-              flags.project,
+              runDir,
               state.completedCycles + groupCyclesUsed + 1,
-              stageRuntime.stage.acceptance_criteria,
+              verificationState,
+              {
+                acceptanceCriteria: stageRuntime.stage.acceptance_criteria,
+                browserTesting: stageRuntime.stage.browser_testing,
+                effort: params.effort,
+                mode: stageRuntime.stage.verification,
+              },
             );
             if (verificationIssues === null) {
               stageRuntime.finished = true;
@@ -1217,8 +1505,10 @@ abstract class RuntimeOrchestratorBase {
     state: RuntimeState,
     acceptCriteria?: string,
     stageLabel?: string,
+    browserTesting?: boolean,
+    verificationMode?: VerificationMode,
   ): OrchestrationResult {
-    const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(
+    const { allAgents, browserReviewerAgents, standardReviewerAgents, workerAgents } = collectRuntimeAgents(
       runDir,
       params,
       flags,
@@ -1236,6 +1526,7 @@ abstract class RuntimeOrchestratorBase {
         cycleIndex <= params.maxCycles;
         cycleIndex += 1
       ) {
+        const verificationState = defaultVerificationState();
         state.currentStageCycles += 1;
         writeRunStatus(flags.project, goalText, {
           cycleNum: state.currentStageCycles,
@@ -1271,12 +1562,21 @@ abstract class RuntimeOrchestratorBase {
           });
         } else if (outcome.directive.terminal === "goal_done") {
           const verificationIssues = runVerification(
-            reviewerAgents,
+            allAgents,
+            standardReviewerAgents,
+            browserReviewerAgents,
+            workerAgents,
             goalText,
             summary,
-            flags.project,
+            runDir,
             cycleIndex,
-            acceptCriteria,
+            verificationState,
+            {
+              acceptanceCriteria: acceptCriteria,
+              browserTesting,
+              effort: params.effort,
+              mode: verificationMode,
+            },
           );
           if (verificationIssues === null) {
             emitLogEvent("orchestrator_done_accepted", {

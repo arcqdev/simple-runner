@@ -13,13 +13,17 @@ import {
   CodexCliRuntimeOrchestrator,
   CursorCliRuntimeOrchestrator,
   GeminiCliRuntimeOrchestrator,
+  parseDoneDirective,
   runOrchestration,
+  verificationPassed,
 } from "../../src/runtime/orchestration.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../../src/cli/runtime.js";
 
 const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_STATE_DIR = process.env.FAKE_AGENT_STATE_DIR;
 const ORIGINAL_CLAUDE_NUDGE = process.env.FAKE_CLAUDE_NUDGE;
+const ORIGINAL_TESTER_MODE = process.env.FAKE_TESTER_MODE;
+const ORIGINAL_BROWSER_MODE = process.env.FAKE_BROWSER_MODE;
 
 function makeTempDir(prefix: string): string {
   const directory = path.join(
@@ -78,6 +82,28 @@ console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-1" }));
 console.log(JSON.stringify({ type: "token_count", input_tokens: 5, output_tokens: 7 }));
 
 if (prompt.includes("Verify the repository state honestly.")) {
+  if (prompt.includes("browser verifier")) {
+    const browserMode = process.env.FAKE_BROWSER_MODE || "fail";
+    const message = browserMode === "pass" ? "ALL CHECKS PASS. Browser verified." : "Found browser regressions.";
+    console.log(JSON.stringify({ type: "agent_message", message }));
+    process.exit(0);
+  }
+
+  if (!prompt.includes("implementation verifier")) {
+    console.log(JSON.stringify({ type: "agent_message", message: "ALL CHECKS PASS. Fresh-worker verification passed." }));
+    process.exit(0);
+  }
+
+  if (process.env.FAKE_TESTER_MODE === "always-pass") {
+    console.log(JSON.stringify({ type: "agent_message", message: "ALL CHECKS PASS. Verified." }));
+    process.exit(0);
+  }
+
+  if (process.env.FAKE_TESTER_MODE === "always-fail") {
+    console.log(JSON.stringify({ type: "agent_message", message: "Found regressions. NOT ALL CHECKS PASS." }));
+    process.exit(0);
+  }
+
   const count = readCounter(verifierFile) + 1;
   writeCounter(verifierFile, count);
   const message = count === 1 ? "Found regressions. NOT ALL CHECKS PASS." : "ALL CHECKS PASS. Verified.";
@@ -88,13 +114,13 @@ if (prompt.includes("Verify the repository state honestly.")) {
 const count = readCounter(workerFile) + 1;
 writeCounter(workerFile, count);
 
-if (prompt.includes("Current Stage (1/2): Stage One")) {
+if (prompt.includes("Stage One")) {
   fs.writeFileSync(path.join(projectDir, "stage-1.txt"), "done\\n", "utf8");
   console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: stage 1 finished" }));
   process.exit(0);
 }
 
-if (prompt.includes("Current Stage (2/2): Stage Two")) {
+if (prompt.includes("Stage Two")) {
   fs.writeFileSync(path.join(projectDir, "stage-2.txt"), "done\\n", "utf8");
   console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: stage 2 finished" }));
   process.exit(0);
@@ -325,9 +351,47 @@ afterEach(() => {
   } else {
     process.env.FAKE_CLAUDE_NUDGE = ORIGINAL_CLAUDE_NUDGE;
   }
+  if (ORIGINAL_TESTER_MODE === undefined) {
+    delete process.env.FAKE_TESTER_MODE;
+  } else {
+    process.env.FAKE_TESTER_MODE = ORIGINAL_TESTER_MODE;
+  }
+  if (ORIGINAL_BROWSER_MODE === undefined) {
+    delete process.env.FAKE_BROWSER_MODE;
+  } else {
+    process.env.FAKE_BROWSER_MODE = ORIGINAL_BROWSER_MODE;
+  }
 });
 
 describe("runtime orchestration", () => {
+  it("normalizes structured and marker done signals", () => {
+    expect(parseDoneDirective('{"done_signal":{"terminal":"goal_done","summary":"json done"}}')).toEqual({
+      explicit: true,
+      source: "json",
+      summary: "json done",
+      terminal: "goal_done",
+    });
+    expect(parseDoneDirective("END_CYCLE: still working")).toEqual({
+      explicit: true,
+      source: "marker",
+      summary: "still working",
+      terminal: "end_cycle",
+    });
+    expect(parseDoneDirective("plain progress update")).toEqual({
+      explicit: false,
+      source: "implicit",
+      summary: "plain progress update",
+      terminal: "end_cycle",
+    });
+  });
+
+  it("accepts only authoritative verification pass signals", () => {
+    expect(verificationPassed("ALL CHECKS PASS")).toBe(true);
+    expect(verificationPassed("**ALL CHECKS PASS**")).toBe(true);
+    expect(verificationPassed("The agent said 'ALL CHECKS PASS' but tests fail.")).toBe(false);
+    expect(verificationPassed("NOT ALL CHECKS PASS - regressions remain.")).toBe(false);
+  });
+
   it("selects backend-specific orchestrator implementations", () => {
     expect(buildRuntimeOrchestrator(buildParams("api", "gpt-5.4"))).toBeInstanceOf(
       ApiRuntimeOrchestrator,
@@ -383,6 +447,179 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"orchestrator_done_rejected"');
     expect(log).toContain('"event":"orchestrator_retry"');
     expect(log).toContain('"event":"orchestrator_done_accepted"');
+  });
+
+  it("supports verification=skip without running verifiers", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+    process.env.FAKE_TESTER_MODE = "always-fail";
+
+    const projectDir = makeTempDir("skip-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        tester: { backend: "codex", model: "gpt-5.4", max_turns: 2 },
+      },
+      verifiers: {
+        browser_testers: [],
+        reviewers: [],
+        testers: ["tester"],
+      },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_skip"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            {
+              description: "Create the first file.",
+              index: 1,
+              name: "Stage One",
+              verification: "skip",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Skip verification"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "stage-1.txt"), "utf8")).toContain("done");
+    expect(readFileSync(runDir.logFile, "utf8")).not.toContain('"event":"done_verification"');
+  });
+
+  it("supports quick-check verification without agent reviewers", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+    process.env.FAKE_TESTER_MODE = "always-fail";
+
+    const projectDir = makeTempDir("quick-check-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        tester: { backend: "codex", model: "gpt-5.4", max_turns: 2 },
+      },
+      verifiers: {
+        browser_testers: [],
+        reviewers: [],
+        testers: ["tester"],
+      },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_quick_check"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            {
+              description: "Create the first file.",
+              index: 1,
+              name: "Stage One",
+              verification: [
+                {
+                  description: "Stage output",
+                  error_message: "Missing stage output.",
+                  path: path.join(projectDir, "stage-1.txt"),
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Quick check verification"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "stage-1.txt"), "utf8")).toContain("done");
+    expect(readFileSync(runDir.logFile, "utf8")).not.toContain('"event":"done_verification"');
+  });
+
+  it("runs browser verifiers only for browser-testing stages", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+    process.env.FAKE_TESTER_MODE = "always-pass";
+    process.env.FAKE_BROWSER_MODE = "fail";
+
+    const projectDir = makeTempDir("browser-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        tester: { backend: "codex", model: "gpt-5.4", max_turns: 2 },
+        tester_browser: { backend: "codex", model: "gpt-5.4", max_turns: 2 },
+      },
+      verifiers: {
+        browser_testers: ["tester_browser"],
+        reviewers: [],
+        testers: ["tester"],
+      },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_browser_control"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { description: "Create the first file.", index: 1, name: "Stage One" },
+            {
+              browser_testing: true,
+              description: "Create the second file.",
+              index: 2,
+              name: "Stage Two",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Browser verifier control"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(false);
+    expect(readFileSync(path.join(projectDir, "stage-1.txt"), "utf8")).toContain("done");
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"agent":"tester_browser"');
+    expect(log).toContain('"event":"orchestrator_done_rejected"');
   });
 
   it("runs staged plans and auto-commits each completed stage", () => {

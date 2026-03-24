@@ -32,6 +32,11 @@ function writeExecutable(filePath: string, content: string): void {
 function installFakeCodex(binDir: string): void {
   const script = `#!${process.execPath}
 const args = process.argv.slice(2);
+function promptFromArgs(argv) {
+  if (argv[0] !== "exec") return "";
+  if (argv[1] === "resume") return argv[3] || "";
+  return argv[1] || "";
+}
 if (args.includes("--version")) {
   console.log("codex 1.2.3");
   process.exit(0);
@@ -62,7 +67,12 @@ const resumeIndex = args.indexOf("resume");
 const resumed = resumeIndex !== -1 ? args[resumeIndex + 1] : null;
 console.log(JSON.stringify({ type: "thread.started", thread_id: resumed ?? "thread-1" }));
 console.log(JSON.stringify({ type: "token_count", input_tokens: 7, output_tokens: 11 }));
-console.log(JSON.stringify({ type: "agent_message", message: resumed ? "GOAL_DONE: Resumed " + resumed : "GOAL_DONE: Completed task" }));
+const prompt = promptFromArgs(args);
+if (prompt.includes("Verify the repository state honestly.")) {
+  console.log(JSON.stringify({ type: "agent_message", message: "ALL CHECKS PASS. Fresh-worker verification passed." }));
+} else {
+  console.log(JSON.stringify({ type: "agent_message", message: resumed ? "GOAL_DONE: Resumed " + resumed : "GOAL_DONE: Completed task" }));
+}
 `;
   writeExecutable(path.join(binDir, "codex"), script);
 }
