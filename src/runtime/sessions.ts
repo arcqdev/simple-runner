@@ -3,6 +3,8 @@ import type { SpawnSyncReturns } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
+import os from "node:os";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 import { emit as emitLogEvent, saveConversation } from "../logging/log.js";
 import type { JsonObject } from "./json.js";
@@ -50,6 +52,13 @@ export type SessionOptions = {
   resumeSessionId?: string | null;
   systemPrompt?: string | null;
   timeoutS?: number;
+};
+
+export type ParallelSessionRequest = {
+  options: SessionQueryOptions;
+  prompt: string;
+  resumeSessionId?: string | null;
+  session: Session;
 };
 
 export interface Session {
@@ -248,6 +257,16 @@ function spawnCommand(
 
 function queryHelperPath(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "query-session-helper.mjs");
+}
+
+function shellEscape(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function writeTempJson(dir: string, fileName: string, data: unknown): string {
+  const filePath = path.join(dir, fileName);
+  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  return filePath;
 }
 
 function runQueryHelper(payload: {
@@ -709,122 +728,44 @@ class SubprocessSession implements Session {
     return { ...this.#stats };
   }
 
-  clone(): Session {
-    return new SubprocessSession(this.backend, this.model, {
-      acpBackend: this.#acpBackend ?? undefined,
-      systemPrompt: this.#systemPrompt,
-      timeoutS: this.#timeoutS,
-    });
-  }
-
-  terminate(): void {}
-
-  close(): void {}
-
-  reset(): void {
-    emitLogEvent("session_reset", {
-      session: this.backend,
-      model: this.model,
-      [this.#definition.sessionIdField]: this.#sessionId,
-      queries_before: this.#stats.queries,
-    });
-    this.#sessionId = null;
-    this.#systemPromptSent = false;
-    this.#stats = emptyStats();
-  }
-
-  query(prompt: string, options: SessionQueryOptions): SessionQueryResult {
+  helperPayload(
+    prompt: string,
+    options: SessionQueryOptions,
+    resumeSessionIdOverride?: string | null,
+  ): {
+    acpBackend?: "gemini" | "opencode";
+    backend: SessionBackend;
+    maxTurns: number;
+    model: string;
+    projectDir: string;
+    prompt: string;
+    resumeSessionId: string | null;
+    systemPrompt?: string | null;
+    timeoutS?: number;
+  } {
     const finalPrompt =
       this.#systemPrompt !== null && !this.#systemPromptSent
         ? `${this.#systemPrompt}\n\n${prompt}`
         : prompt;
     this.#systemPromptSent = true;
 
-    emitLogEvent("session_query_start", {
-      agent: options.agentName,
-      session: this.backend,
+    return {
+      acpBackend: this.#acpBackend ?? undefined,
+      backend: this.backend,
+      maxTurns: options.maxTurns,
       model: this.model,
+      projectDir: options.projectDir,
       prompt: finalPrompt,
-      [this.#definition.sessionIdField]: this.#sessionId,
-      project_dir: options.projectDir,
-    });
+      resumeSessionId: resumeSessionIdOverride ?? this.#sessionId,
+      systemPrompt: null,
+      timeoutS: this.#timeoutS,
+    };
+  }
 
-    const helperResult =
-      this.backend === "gemini-cli"
-        ? runQueryHelper({
-            acpBackend: this.#acpBackend ?? undefined,
-            backend: this.backend,
-            maxTurns: options.maxTurns,
-            model: this.model,
-            projectDir: options.projectDir,
-            prompt,
-            resumeSessionId: this.#sessionId,
-            systemPrompt: this.#systemPromptSent ? null : this.#systemPrompt,
-            timeoutS: this.#timeoutS,
-          })
-        : (() => {
-            const command = this.#definition.buildCommand({
-              maxTurns: options.maxTurns,
-              model: this.model,
-              projectDir: options.projectDir,
-              prompt: finalPrompt,
-              sessionId: this.#sessionId,
-            });
-
-            const result = spawnCommand(command.command, command.args, {
-              cwd: this.backend === "codex" ? undefined : options.projectDir,
-              timeoutS: this.#timeoutS,
-            });
-            const parsed = this.#definition.parseOutput(result);
-            let isError =
-              result.timedOut ||
-              result.error !== null ||
-              result.exitCode !== 0 ||
-              result.signal !== null ||
-              parsed.isError === true;
-            let text = parsed.resultText;
-
-            if (!isError && text.length === 0 && result.stderr.trim().length > 0) {
-              text = result.stderr.trim();
-            }
-
-            if (isError && text.length === 0) {
-              text =
-                classifySessionError(result, this.backend, this.#timeoutS) ??
-                result.stderr.trim() ??
-                result.stdout.trim();
-            }
-
-            if (
-              !isError &&
-              this.backend === "codex" &&
-              text.length === 0 &&
-              result.stderr.trim().length > 0
-            ) {
-              isError = true;
-              text =
-                classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
-            }
-
-            if (result.timedOut) {
-              emitLogEvent("session_timeout", {
-                session: this.backend,
-                timeout_s: this.#timeoutS,
-              });
-            }
-
-            return {
-              elapsedS: result.elapsedS,
-              inputTokens: parsed.inputTokens ?? null,
-              isError,
-              outputTokens: parsed.outputTokens ?? null,
-              rawMessages: parsed.rawMessages ?? null,
-              sessionId: parsed.sessionId ?? this.#sessionId,
-              text,
-              usageRaw: parsed.usageRaw ?? null,
-            } satisfies HelperQueryOutput;
-          })();
-
+  applyQueryResult(
+    helperResult: HelperQueryOutput,
+    options: SessionQueryOptions,
+  ): SessionQueryResult {
     if (helperResult.text.includes("timed out")) {
       emitLogEvent("session_timeout", {
         session: this.backend,
@@ -882,6 +823,210 @@ class SubprocessSession implements Session {
       text: helperResult.text.trim(),
       usageRaw: helperResult.usageRaw ?? null,
     };
+  }
+
+  clone(): Session {
+    return new SubprocessSession(this.backend, this.model, {
+      acpBackend: this.#acpBackend ?? undefined,
+      systemPrompt: this.#systemPrompt,
+      timeoutS: this.#timeoutS,
+    });
+  }
+
+  terminate(): void {}
+
+  close(): void {}
+
+  reset(): void {
+    emitLogEvent("session_reset", {
+      session: this.backend,
+      model: this.model,
+      [this.#definition.sessionIdField]: this.#sessionId,
+      queries_before: this.#stats.queries,
+    });
+    this.#sessionId = null;
+    this.#systemPromptSent = false;
+    this.#stats = emptyStats();
+  }
+
+  query(prompt: string, options: SessionQueryOptions): SessionQueryResult {
+    const helperPayload = this.helperPayload(prompt, options);
+
+    emitLogEvent("session_query_start", {
+      agent: options.agentName,
+      session: this.backend,
+      model: this.model,
+      prompt: helperPayload.prompt,
+      [this.#definition.sessionIdField]: this.#sessionId,
+      project_dir: options.projectDir,
+    });
+
+    const helperResult =
+      this.backend === "gemini-cli"
+        ? runQueryHelper({
+            ...helperPayload,
+            prompt,
+            systemPrompt: this.#systemPrompt,
+          })
+        : (() => {
+            const command = this.#definition.buildCommand({
+              maxTurns: helperPayload.maxTurns,
+              model: helperPayload.model,
+              projectDir: helperPayload.projectDir,
+              prompt: helperPayload.prompt,
+              sessionId: this.#sessionId,
+            });
+
+            const result = spawnCommand(command.command, command.args, {
+              cwd: this.backend === "codex" ? undefined : options.projectDir,
+              timeoutS: this.#timeoutS,
+            });
+            const parsed = this.#definition.parseOutput(result);
+            let isError =
+              result.timedOut ||
+              result.error !== null ||
+              result.exitCode !== 0 ||
+              result.signal !== null ||
+              parsed.isError === true;
+            let text = parsed.resultText;
+
+            if (!isError && text.length === 0 && result.stderr.trim().length > 0) {
+              text = result.stderr.trim();
+            }
+
+            if (isError && text.length === 0) {
+              text =
+                classifySessionError(result, this.backend, this.#timeoutS) ??
+                result.stderr.trim() ??
+                result.stdout.trim();
+            }
+
+            if (
+              !isError &&
+              this.backend === "codex" &&
+              text.length === 0 &&
+              result.stderr.trim().length > 0
+            ) {
+              isError = true;
+              text =
+                classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
+            }
+
+            if (result.timedOut) {
+              emitLogEvent("session_timeout", {
+                session: this.backend,
+                timeout_s: this.#timeoutS,
+              });
+            }
+
+            return {
+              elapsedS: result.elapsedS,
+              inputTokens: parsed.inputTokens ?? null,
+              isError,
+              outputTokens: parsed.outputTokens ?? null,
+              rawMessages: parsed.rawMessages ?? null,
+              sessionId: parsed.sessionId ?? this.#sessionId,
+              text,
+              usageRaw: parsed.usageRaw ?? null,
+            } satisfies HelperQueryOutput;
+          })();
+
+    return this.applyQueryResult(helperResult, options);
+  }
+
+  queryWithResumeOverride(
+    prompt: string,
+    options: SessionQueryOptions,
+    resumeSessionIdOverride?: string | null,
+  ): SessionQueryResult {
+    if (resumeSessionIdOverride !== undefined) {
+      this.#sessionId = resumeSessionIdOverride;
+    }
+    return this.query(prompt, options);
+  }
+}
+
+export function querySessionsInParallel(requests: ParallelSessionRequest[]): SessionQueryResult[] {
+  if (requests.length === 0) {
+    return [];
+  }
+
+  if (!requests.every((request) => request.session instanceof SubprocessSession)) {
+    return requests.map((request) => request.session.query(request.prompt, request.options));
+  }
+
+  if (
+    requests.some(
+      (request) =>
+        request.session instanceof SubprocessSession && request.session.backend === "gemini-cli",
+    )
+  ) {
+    return requests.map((request) =>
+      (request.session as SubprocessSession).queryWithResumeOverride(
+        request.prompt,
+        request.options,
+        request.resumeSessionId,
+      ),
+    );
+  }
+
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-parallel-"));
+  try {
+    const helperRequests = requests.map((request) => {
+      const session = request.session as SubprocessSession;
+      const payload = session.helperPayload(
+        request.prompt,
+        request.options,
+        request.resumeSessionId,
+      );
+      return { payload, request, session };
+    });
+
+    for (const { payload, request, session } of helperRequests) {
+      emitLogEvent("session_query_start", {
+        agent: request.options.agentName,
+        session: session.backend,
+        model: session.model,
+        prompt: payload.prompt,
+        [ADAPTERS[session.backend].sessionIdField]: payload.resumeSessionId,
+        project_dir: request.options.projectDir,
+      });
+    }
+
+    const outputPaths = helperRequests.map(({ payload }, index) => {
+      const payloadPath = writeTempJson(tempDir, `payload-${index}.json`, payload);
+      const outputPath = path.join(tempDir, `result-${index}.json`);
+      return { outputPath, payloadPath };
+    });
+
+    const helperPath = queryHelperPath();
+    const command = outputPaths
+      .map(
+        ({ payloadPath, outputPath }) =>
+          `${shellEscape(process.execPath)} ${shellEscape(helperPath)} ${shellEscape(payloadPath)} ${shellEscape(outputPath)}`,
+      )
+      .map((entry) => `(${entry}) &`)
+      .join("\n")
+      .concat("\nwait\n");
+
+    const result = spawnSync(process.env.SHELL || "/bin/sh", ["-lc", command], {
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    if ((result.status ?? 1) !== 0) {
+      throw new Error((result.stderr || result.stdout || "parallel helper failed").trim());
+    }
+
+    return helperRequests.map(({ request, session }, index) => {
+      const helperResult = JSON.parse(
+        readFileSync(outputPaths[index]!.outputPath, "utf8"),
+      ) as HelperQueryOutput;
+      return session.applyQueryResult(helperResult, request.options);
+    });
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
   }
 }
 

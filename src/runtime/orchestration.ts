@@ -1,9 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
@@ -30,7 +28,7 @@ import {
 import {
   createSessionForOrchestrator,
   createSessionForTeamAgent,
-  type SessionBackend,
+  querySessionsInParallel,
   type Session,
   type SessionQueryResult,
 } from "./sessions.js";
@@ -177,21 +175,6 @@ type ParallelStageRuntime = {
   stage: GoalStage;
   summary: string;
   worker: RuntimeAgent;
-};
-
-type ParallelQueryPayload = {
-  backend: SessionBackend;
-  maxTurns: number;
-  model: string;
-  projectDir: string;
-  prompt: string;
-  resumeSessionId: string | null;
-  systemPrompt?: string | null;
-  timeoutS?: number;
-};
-
-type ParallelQueryResult = SessionQueryResult & {
-  sessionId: string | null;
 };
 
 export type OrchestrationArtifacts = {
@@ -1287,63 +1270,6 @@ function cycleSummary(text: string): string {
   return text.replace(/\s+/gu, " ").trim().slice(0, 4000);
 }
 
-function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function parallelHelperPath(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "query-session-helper.mjs");
-}
-
-function writeTempJson(dir: string, fileName: string, data: unknown): string {
-  const filePath = path.join(dir, fileName);
-  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  return filePath;
-}
-
-function runParallelQueries(payloads: ParallelQueryPayload[]): ParallelQueryResult[] {
-  if (payloads.length === 0) {
-    return [];
-  }
-
-  const helperPath = parallelHelperPath();
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-parallel-"));
-
-  try {
-    const outputPaths = payloads.map((payload, index) => {
-      const payloadPath = writeTempJson(tempDir, `payload-${index}.json`, payload);
-      const outputPath = path.join(tempDir, `result-${index}.json`);
-      return { outputPath, payloadPath };
-    });
-
-    const command = outputPaths
-      .map(
-        ({ payloadPath, outputPath }) =>
-          `${shellEscape(process.execPath)} ${shellEscape(helperPath)} ${shellEscape(payloadPath)} ${shellEscape(outputPath)}`,
-      )
-      .map((entry) => `(${entry}) &`)
-      .join("\n")
-      .concat("\nwait\n");
-
-    const result = spawnSync(process.env.SHELL || "/bin/sh", ["-lc", command], {
-      encoding: "utf8",
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    if ((result.status ?? 1) !== 0) {
-      throw new Error((result.stderr || result.stdout || "parallel helper failed").trim());
-    }
-
-    return outputPaths.map(({ outputPath }) => {
-      const parsed = JSON.parse(readFileSync(outputPath, "utf8")) as ParallelQueryResult;
-      return parsed;
-    });
-  } finally {
-    rmSync(tempDir, { force: true, recursive: true });
-  }
-}
-
 abstract class RuntimeOrchestratorBase {
   readonly kind: string;
   readonly model: string;
@@ -1644,12 +1570,14 @@ abstract class RuntimeOrchestratorBase {
         stageRuntimes.some((stage) => !stage.finished)
       ) {
         const activeStages = stageRuntimes.filter((stage) => !stage.finished);
-        const parallelResults = runParallelQueries(
+        const parallelResults = querySessionsInParallel(
           activeStages.map((stage) => ({
-            backend: stage.worker.session.backend,
-            maxTurns: stage.worker.config.max_turns ?? params.maxExchanges,
-            model: stage.worker.session.model,
-            projectDir: worktrees.get(stage.stage.index)?.worktreeDir ?? flags.project,
+            options: {
+              agentName: stage.worker.name,
+              maxTurns: stage.worker.config.max_turns ?? params.maxExchanges,
+              projectDir: worktrees.get(stage.stage.index)?.worktreeDir ?? flags.project,
+              queryIndex: stage.worker.session.stats.queries + 1,
+            },
             prompt: buildWorkerPrompt(
               stage.goalText,
               worktrees.get(stage.stage.index)?.worktreeDir ?? flags.project,
@@ -1658,8 +1586,7 @@ abstract class RuntimeOrchestratorBase {
               stage.cyclesUsed + 1,
             ),
             resumeSessionId: stage.sessionId,
-            systemPrompt: stage.worker.config.system_prompt,
-            timeoutS: stage.worker.config.session_timeout_s ?? stage.worker.config.timeout_s,
+            session: stage.worker.session,
           })),
         );
 
@@ -1693,7 +1620,7 @@ abstract class RuntimeOrchestratorBase {
           stageRuntime.cyclesUsed += 1;
           stageRuntime.priorSummary = stageSummary;
           stageRuntime.summary = stageSummary;
-          stageRuntime.sessionId = queryResult.sessionId;
+          stageRuntime.sessionId = stageRuntime.worker.session.sessionId;
           persistPendingExchange(runDir, state, {
             acceptanceCriteria: stageRuntime.stage.acceptance_criteria,
             agentName: stageRuntime.worker.name,

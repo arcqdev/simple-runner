@@ -275,6 +275,7 @@ console.log(JSON.stringify({ type: "result", result: "GOAL_DONE: cursor worker f
 function installFakeGemini(binDir: string): void {
   const script = `#!${process.execPath}
 const fs = require("node:fs");
+const path = require("node:path");
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   console.log("gemini 1.0.0");
@@ -313,6 +314,13 @@ if (args[0] === "acp") {
       return;
     }
     if (message.method === "session.resume") {
+      if (process.env.FAKE_PARALLEL_RESUME_LOG) {
+        fs.appendFileSync(
+          process.env.FAKE_PARALLEL_RESUME_LOG,
+          (message.params?.locator?.conversationId || "unknown") + "\\n",
+          "utf8",
+        );
+      }
       send({ id: message.id, jsonrpc: "2.0", result: { locator: message.params.locator } });
       return;
     }
@@ -341,7 +349,50 @@ if (args[0] === "acp") {
         });
         return;
       }
-      fs.writeFileSync(process.cwd() + "/gemini-output.txt", "done\\n", "utf8");
+      if (promptText.includes("Stage One")) {
+        fs.writeFileSync(path.join(process.cwd(), "stage-1.txt"), "done\\n", "utf8");
+        send({
+          jsonrpc: "2.0",
+          method: "result",
+          params: {
+            locator: { conversationId: "gemini-thread" },
+            stopReason: "completed",
+            text: "GOAL_DONE: stage 1 finished",
+            usage: { inputTokens: 10, outputTokens: 4 },
+          },
+        });
+        return;
+      }
+      if (promptText.includes("Current Stage (2/4): Parallel A") || promptText.includes("Current Stage (3/4): Parallel B")) {
+        const label = promptText.includes("Parallel A") ? "parallel-a" : "parallel-b";
+        fs.writeFileSync(path.join(process.cwd(), label + ".txt"), "done\\n", "utf8");
+        send({
+          jsonrpc: "2.0",
+          method: "result",
+          params: {
+            locator: { conversationId: "gemini-thread" },
+            stopReason: "completed",
+            text: "GOAL_DONE: " + label + " finished",
+            usage: { inputTokens: 10, outputTokens: 4 },
+          },
+        });
+        return;
+      }
+      if (promptText.includes("Current Stage (4/4): Final Sequential")) {
+        fs.writeFileSync(path.join(process.cwd(), "final-sequential.txt"), "done\\n", "utf8");
+        send({
+          jsonrpc: "2.0",
+          method: "result",
+          params: {
+            locator: { conversationId: "gemini-thread" },
+            stopReason: "completed",
+            text: "GOAL_DONE: final sequential finished",
+            usage: { inputTokens: 10, outputTokens: 4 },
+          },
+        });
+        return;
+      }
+      fs.writeFileSync(path.join(process.cwd(), "gemini-output.txt"), "done\\n", "utf8");
       send({
         jsonrpc: "2.0",
         method: "result",
@@ -363,6 +414,112 @@ if (args[0] === "acp") {
 }
 `;
   writeExecutable(path.join(binDir, "gemini"), script);
+}
+
+function installFakeOpencode(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const { createInterface } = require("node:readline");
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("opencode 0.1.0");
+  process.exit(0);
+}
+if (args[0] !== "acp") {
+  process.exit(1);
+}
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+fs.mkdirSync(stateDir, { recursive: true });
+const requestLog = path.join(stateDir, "opencode-acp-requests.jsonl");
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n", "utf8");
+  if (message.method === "initialize") {
+    send({
+      id: message.id,
+      jsonrpc: "2.0",
+      result: {
+        capabilities: {
+          initialize: true,
+          prompt: true,
+          protocolVersion: "0.1",
+          resume: true,
+          serverName: "fake-opencode-acp",
+          sessionLifecycle: true,
+          serverVersion: "1.0.0",
+          streaming: true,
+          usage: true,
+        },
+      },
+    });
+    return;
+  }
+  if (message.method === "session.create") {
+    send({ id: message.id, jsonrpc: "2.0", result: { locator: { conversationId: "thread-9" } } });
+    return;
+  }
+  if (message.method === "session.resume") {
+    send({ id: message.id, jsonrpc: "2.0", result: { locator: message.params.locator } });
+    return;
+  }
+  if (message.method === "prompt") {
+    const promptText = message.params?.prompt || "";
+    send({ id: message.id, jsonrpc: "2.0", result: { accepted: true } });
+    send({
+      jsonrpc: "2.0",
+      method: "thread.created",
+      params: {
+        id: "thread-9",
+        model: "gemini-2.5-flash",
+      },
+    });
+    if (promptText.includes("Verify the repository state honestly.")) {
+      send({
+        jsonrpc: "2.0",
+        method: "run.completed",
+        params: {
+          output: "ALL CHECKS PASS",
+          status: "completed",
+          thread: {
+            id: "thread-9",
+            providerThreadId: "provider-3",
+          },
+          usage: {
+            completion_tokens: 6,
+            prompt_tokens: 4,
+          },
+        },
+      });
+      return;
+    }
+    fs.writeFileSync(path.join(process.cwd(), "opencode-output.txt"), "done\\n", "utf8");
+    send({
+      jsonrpc: "2.0",
+      method: "run.completed",
+      params: {
+        output: "GOAL_DONE: OpenCode completed",
+        status: "completed",
+        thread: {
+          id: "thread-9",
+          providerThreadId: "provider-3",
+        },
+        usage: {
+          completion_tokens: 6,
+          prompt_tokens: 4,
+        },
+      },
+    });
+    return;
+  }
+  if (message.method === "shutdown") {
+    send({ id: message.id, jsonrpc: "2.0", result: {} });
+    process.exit(0);
+  }
+});
+`;
+  writeExecutable(path.join(binDir, "opencode"), script);
 }
 
 function projectFlags(
@@ -1237,6 +1394,131 @@ describe("runtime orchestration", () => {
     expect(resumes).toContain("parallel-b:parallel-b-saved");
   }, 12000);
 
+  it("restores saved ACP parallel stage sessions when resuming a staged run", () => {
+    const binDir = makeTempDir("parallel-gemini-bin");
+    installFakeGemini(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("parallel-gemini-project");
+    const stateDir = makeTempDir("parallel-gemini-state");
+    const resumeLog = path.join(stateDir, "gemini-parallel-resumes.txt");
+    process.env.FAKE_AGENT_STATE_DIR = stateDir;
+    process.env.FAKE_PARALLEL_RESUME_LOG = resumeLog;
+    initGitRepo(projectDir);
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "gemini-cli", model: "gemini-3-flash", max_turns: 3 },
+        worker_slow: { backend: "gemini-cli", model: "gemini-3-flash", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_parallel_gemini_resume"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { index: 1, name: "Stage One", description: "Create the setup artifact." },
+            {
+              index: 2,
+              name: "Parallel A",
+              description: "Run branch A in parallel.",
+              parallel_group: 1,
+            },
+            {
+              index: 3,
+              name: "Parallel B",
+              description: "Run branch B in parallel.",
+              parallel_group: 1,
+            },
+            {
+              index: 4,
+              name: "Final Sequential",
+              description: "Finish with a sequential stage after the parallel group.",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(runDir.root, "runtime-state.json"),
+      `${JSON.stringify(
+        {
+          agentSessionIds: {},
+          completedCycles: 1,
+          completedStages: [1],
+          currentStageCycles: 0,
+          finished: false,
+          lastSummary: "S2: partial a | S3: partial b",
+          parallelStageState: {
+            "2": {
+              agentName: "worker_fast",
+              cycleIndex: 2,
+              priorSummary: "partial a",
+              scope: "parallel",
+              sessionId: "parallel-a-saved",
+              stageIndex: 2,
+              summary: "partial a",
+            },
+            "3": {
+              agentName: "worker_slow",
+              cycleIndex: 2,
+              priorSummary: "partial b",
+              scope: "parallel",
+              sessionId: "parallel-b-saved",
+              stageIndex: 3,
+              summary: "partial b",
+            },
+          },
+          pendingExchanges: [
+            {
+              agentName: "worker_fast",
+              cycleIndex: 2,
+              priorSummary: "partial a",
+              scope: "parallel",
+              sessionId: "parallel-a-saved",
+              stageIndex: 2,
+              summary: "partial a",
+            },
+            {
+              agentName: "worker_slow",
+              cycleIndex: 2,
+              priorSummary: "partial b",
+              scope: "parallel",
+              sessionId: "parallel-b-saved",
+              stageIndex: 3,
+              summary: "partial b",
+            },
+          ],
+          stageSummaries: ["stage 1 done"],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("gemini-cli", "gemini-3-flash"),
+      buildGoal("Resume mixed staged ACP execution"),
+      projectFlags(projectDir, "gemini-cli:gemini-3-flash"),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "final-sequential.txt"), "utf8")).toContain("done");
+
+    const resumes = readFileSync(resumeLog, "utf8");
+    expect(resumes).toContain("parallel-a-saved");
+    expect(resumes).toContain("parallel-b-saved");
+  }, 12000);
+
   it("discards non-persisted parallel worktree changes", () => {
     const binDir = makeTempDir("kodo-bin");
     installFakeCodex(binDir);
@@ -1461,5 +1743,38 @@ describe("runtime orchestration", () => {
     expect(result.finished).toBe(true);
     expect(readFileSync(path.join(projectDir, "gemini-output.txt"), "utf8")).toContain("done");
     expect(readFileSync(runDir.logFile, "utf8")).toContain('"orchestrator":"gemini-cli"');
+  });
+
+  it("runs opencode team agents through ACP-backed orchestration sessions", () => {
+    const binDir = makeTempDir("opencode-bin");
+    installFakeGemini(binDir);
+    installFakeOpencode(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("opencode-project");
+    const stateDir = makeTempDir("opencode-state");
+    process.env.FAKE_AGENT_STATE_DIR = stateDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "opencode", model: "gemini-2.5-flash", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_opencode"));
+    init(runDir);
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("gemini-cli", "gemini-3-flash"),
+      buildGoal("Implement with OpenCode"),
+      projectFlags(projectDir, "gemini-cli:gemini-3-flash"),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(readFileSync(path.join(projectDir, "opencode-output.txt"), "utf8")).toContain("done");
+    expect(readFileSync(path.join(stateDir, "opencode-acp-requests.jsonl"), "utf8")).toContain(
+      '"method":"session.create"',
+    );
   });
 });
