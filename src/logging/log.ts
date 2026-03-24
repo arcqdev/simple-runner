@@ -139,6 +139,13 @@ export function getLogFile(): string {
   return activeLogFile;
 }
 
+export function getElapsedS(): number | null {
+  if (activeLogFile === null || startTime === 0) {
+    return null;
+  }
+  return Number(((Date.now() - startTime) / 1000).toFixed(3));
+}
+
 class FileNotFoundError extends Error {
   constructor(message: string) {
     super(message);

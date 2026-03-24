@@ -97,23 +97,7 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
   - Archives include those artifacts as part of the normal run payload.
   - Viewer and run parsing can surface the captured conversation paths.
 
-### 10. Trace Upload
-
-- Trace upload is not ported.
-  - Missing best-effort archive upload to remote storage.
-  - Missing metadata indexing behavior.
-  - Missing run-teardown upload behavior.
-- Viewer/UI mentions around trace upload are not equivalent to the actual Python functionality.
-
-### 11. Archive Scrubbing
-
-- Archive scrubbing is reduced.
-  - Current TypeScript behavior is limited to a narrow regex-based redaction pass.
-  - Missing Python-equivalent secret scanning.
-  - Missing Python-equivalent PII cleaning.
-  - Missing Python-equivalent archive scrubbing depth for shared run artifacts.
-
-### 12. Summarization
+### 10. Summarization
 
 - LLM-backed summarization is not ported.
   - Missing asynchronous summarizer behavior.
@@ -121,25 +105,24 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
   - Missing Gemini-backed summarization fallback.
   - Missing accumulated cycle-summary generation parity.
 
-### 13. Viewer Richness
+### 11. Viewer Richness
 
 - Viewer support exists, but the Python viewer remains richer.
   - Missing parity with the reusable Python HTML viewer app.
   - Missing richer stats presentation driven by Python run accounting.
   - Missing Python-level browser-verified viewer behavior coverage.
 
-### 14. Operational Docs And Support Scripts
+### 12. Operational Docs And Support Scripts
 
 - Supporting operational workflows are thinner than Python.
   - Missing Python-equivalent docs/scripts for resume verification.
   - Missing Python-equivalent docs/scripts for viewer verification.
   - Missing Python’s surrounding support assets for these workflows.
 
-### 15. Test Coverage For Missing Areas
+### 13. Test Coverage For Missing Areas
 
 - The TypeScript repo does not yet have parity-grade test coverage for the missing areas above.
   - Missing summarizer tests.
-  - Missing trace-upload tests.
   - Missing browser-level viewer verification coverage.
   - Missing broader orchestration parity coverage for adaptive flows beyond the staged/worktree cases now covered.
 

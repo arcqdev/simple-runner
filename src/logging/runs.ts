@@ -101,7 +101,9 @@ function emptyAgentStats(costBucket = ""): AgentStats {
 }
 
 function stringList(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 function inferCostBucketFromName(name: string): string {
@@ -115,7 +117,11 @@ function inferCostBucketFromName(name: string): string {
   if (normalized.includes("codex")) {
     return "codex_subscription";
   }
-  if (normalized.includes("cursor") || normalized.includes("browser") || normalized.includes("tester")) {
+  if (
+    normalized.includes("cursor") ||
+    normalized.includes("browser") ||
+    normalized.includes("tester")
+  ) {
     return "cursor_subscription";
   }
   if (normalized.includes("gemini")) {
@@ -189,7 +195,10 @@ export function parseRun(logFile: string): RunState | null {
         currentStageCycles = 0;
         break;
       case "run_end":
-        finished = true;
+        finished = event.finished !== false;
+        if (typeof event.summary === "string" && event.summary.length > 0) {
+          lastSummary = event.summary;
+        }
         break;
       case "debug_run_start":
         isDebug = true;
@@ -229,8 +238,7 @@ export function parseRun(logFile: string): RunState | null {
           if (bucket.length > 0) {
             stats.costBucket = bucket;
           }
-          const conversationLog =
-            stringField(event, "conversation_log") ?? pendingConversationLog;
+          const conversationLog = stringField(event, "conversation_log") ?? pendingConversationLog;
           if (conversationLog !== null) {
             stats.conversationLogs.push(conversationLog);
             conversationArtifacts.add(conversationLog);
@@ -241,8 +249,7 @@ export function parseRun(logFile: string): RunState | null {
         pendingConversationLog = null;
         break;
       case "orchestrator_response":
-        orchestratorCostBucket =
-          stringField(event, "cost_bucket") ?? orchestratorCostBucket;
+        orchestratorCostBucket = stringField(event, "cost_bucket") ?? orchestratorCostBucket;
         break;
       default:
         break;

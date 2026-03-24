@@ -3,8 +3,9 @@ import path from "node:path";
 import process from "node:process";
 
 import { getTeamByName, loadTeamConfigFile } from "../config/team-config.js";
-import { initAppend, emit as emitLogEvent, RunDir } from "../logging/log.js";
-import { getRunById } from "../logging/runs.js";
+import { getElapsedS, initAppend, emit as emitLogEvent, RunDir } from "../logging/log.js";
+import { getRunById, parseRun } from "../logging/runs.js";
+import { uploadTrace } from "../logging/trace-upload.js";
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
 import { availableBackends, preflightWarningsForBackends } from "./backends.js";
@@ -120,7 +121,7 @@ function configuredBackends(
   const teamConfig =
     runTeamFile !== undefined && existsSync(runTeamFile)
       ? loadTeamConfigFile(runTeamFile)
-      : getTeamByName(params.team, undefined, projectDir)?.config ?? null;
+      : (getTeamByName(params.team, undefined, projectDir)?.config ?? null);
   if (teamConfig !== null) {
     for (const agent of Object.values(teamConfig.agents)) {
       backends.add(agent.backend);
@@ -243,57 +244,110 @@ export function executePendingRun(
   goal: ResolvedGoal,
   flags: MainFlags,
 ): ExecutionResult {
-  const backendWarnings = preflightWarningsForBackends(
-    configuredBackends(params, flags.project, runDir.teamFile),
-  );
+  let result: ExecutionResult | null = null;
+  let runError: unknown = null;
 
-  emitLogEvent("preflight_start", {
-    orchestrator: params.orchestrator,
-    project_dir: flags.project,
-    team: params.team,
-  });
-  if (backendWarnings.length > 0) {
-    emitLogEvent("preflight_warnings", {
+  try {
+    const backendWarnings = preflightWarningsForBackends(
+      configuredBackends(params, flags.project, runDir.teamFile),
+    );
+
+    emitLogEvent("preflight_start", {
+      orchestrator: params.orchestrator,
+      project_dir: flags.project,
+      team: params.team,
+    });
+    if (backendWarnings.length > 0) {
+      emitLogEvent("preflight_warnings", {
+        warnings: backendWarnings,
+      });
+    }
+    emitLogEvent("preflight_end", {
+      ok: true,
+      orchestrator: params.orchestrator,
+      team: params.team,
       warnings: backendWarnings,
     });
-  }
-  emitLogEvent("preflight_end", {
-    ok: true,
-    orchestrator: params.orchestrator,
-    team: params.team,
-    warnings: backendWarnings,
-  });
 
-  const sessionBackend = backendForOrchestrator(params.orchestrator);
-  if (
-    !shouldUseSessionRuntime() ||
-    process.env.KODO_ENABLE_SESSION_RUNTIME === "0" ||
-    sessionBackend === null ||
-    !availableBackends()[sessionBackend === "claude-cli" ? "claude" : sessionBackend]
-  ) {
-    const reason = !shouldUseSessionRuntime()
-      ? "Session runtime disabled for this environment"
-      : process.env.KODO_ENABLE_SESSION_RUNTIME === "0"
-        ? "Session runtime explicitly disabled"
-        : sessionBackend === null
-          ? `No session adapter for orchestrator ${params.orchestrator}`
-          : `Backend ${sessionBackend} is not installed; using synthetic runtime fallback`;
-    return syntheticExecutionResult(runDir, params, goal, flags, reason);
-  }
+    const sessionBackend = backendForOrchestrator(params.orchestrator);
+    if (
+      !shouldUseSessionRuntime() ||
+      process.env.KODO_ENABLE_SESSION_RUNTIME === "0" ||
+      sessionBackend === null ||
+      !availableBackends()[sessionBackend === "claude-cli" ? "claude" : sessionBackend]
+    ) {
+      const reason = !shouldUseSessionRuntime()
+        ? "Session runtime disabled for this environment"
+        : process.env.KODO_ENABLE_SESSION_RUNTIME === "0"
+          ? "Session runtime explicitly disabled"
+          : sessionBackend === null
+            ? `No session adapter for orchestrator ${params.orchestrator}`
+            : `Backend ${sessionBackend} is not installed; using synthetic runtime fallback`;
+      result = syntheticExecutionResult(runDir, params, goal, flags, reason);
+      return result;
+    }
 
-  const runtime = runOrchestration(runDir, params, goal, flags);
-  return {
-    artifacts: runtime.artifacts,
-    cyclesCompleted: runtime.cyclesCompleted,
-    finished: runtime.finished,
-    message: runtime.message,
-    runId: runDir.runId,
-    runRoot: runDir.root,
-    summary:
-      runtime.summary.length > 0
-        ? runtime.summary
-        : buildRuntimeSummary(params, goal.goalText ?? "", runtime.message),
-  };
+    const runtime = runOrchestration(runDir, params, goal, flags);
+    result = {
+      artifacts: runtime.artifacts,
+      cyclesCompleted: runtime.cyclesCompleted,
+      finished: runtime.finished,
+      message: runtime.message,
+      runId: runDir.runId,
+      runRoot: runDir.root,
+      summary:
+        runtime.summary.length > 0
+          ? runtime.summary
+          : buildRuntimeSummary(params, goal.goalText ?? "", runtime.message),
+    };
+    return result;
+  } catch (error) {
+    runError = error;
+    throw error;
+  } finally {
+    const parsedState = existsSync(runDir.logFile) ? parseRun(runDir.logFile) : null;
+    if (result === null && existsSync(runDir.logFile)) {
+      emitLogEvent("run_end", {
+        cost_bucket: parsedState?.orchestratorCostBucket ?? "unknown",
+        error:
+          runError instanceof Error ? `${runError.name}: ${runError.message}` : String(runError),
+        finished: false,
+        orchestrator: params.orchestrator,
+        summary: parsedState?.lastSummary ?? "",
+        total_cycles: parsedState?.completedCycles ?? 0,
+        total_exchanges: parsedState?.completedCycles ?? 0,
+      });
+    }
+
+    emitLogEvent("trace_upload_start", {
+      enabled: process.env.KODO_TRACE_UPLOAD ?? "",
+      run_id: runDir.runId,
+    });
+    try {
+      const upload = uploadTrace({
+        agentCount: parsedState?.team.length ?? 0,
+        elapsedS: getElapsedS(),
+        finished: result?.finished ?? parsedState?.finished ?? false,
+        goal: goal.goalText ?? parsedState?.goal ?? "",
+        model: params.orchestratorModel,
+        orchestrator: params.orchestrator,
+        projectDir: flags.project,
+        runDir: runDir.root,
+        runError,
+        runId: runDir.runId,
+        totalCostUsd: 0,
+        totalCycles: result?.cyclesCompleted ?? parsedState?.completedCycles ?? 0,
+        totalExchanges: result?.cyclesCompleted ?? parsedState?.completedCycles ?? 0,
+      });
+      emitLogEvent("trace_upload_end", upload);
+    } catch (uploadError) {
+      emitLogEvent("trace_upload_end", {
+        attempted: true,
+        reason: uploadError instanceof Error ? uploadError.message : String(uploadError),
+        uploaded: false,
+      });
+    }
+  }
 }
 
 function loadGoalText(runDir: RunDir): string {
@@ -368,7 +422,10 @@ function inferGoalSource(runDir: RunDir): ResolvedGoal["source"] {
   return "goal";
 }
 
-function seedResumeRuntimeState(runDir: RunDir, state: NonNullable<ReturnType<typeof getRunById>>): void {
+function seedResumeRuntimeState(
+  runDir: RunDir,
+  state: NonNullable<ReturnType<typeof getRunById>>,
+): void {
   const filePath = path.join(runDir.root, "runtime-state.json");
   if (existsSync(filePath)) {
     return;

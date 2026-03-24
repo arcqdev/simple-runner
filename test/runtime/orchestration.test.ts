@@ -18,6 +18,7 @@ import {
   verificationPassed,
 } from "../../src/runtime/orchestration.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../../src/cli/runtime.js";
+import { executePendingRun } from "../../src/runtime/engine.js";
 
 const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_STATE_DIR = process.env.FAKE_AGENT_STATE_DIR;
@@ -25,6 +26,10 @@ const ORIGINAL_CLAUDE_NUDGE = process.env.FAKE_CLAUDE_NUDGE;
 const ORIGINAL_TESTER_MODE = process.env.FAKE_TESTER_MODE;
 const ORIGINAL_BROWSER_MODE = process.env.FAKE_BROWSER_MODE;
 const ORIGINAL_PARALLEL_RESUME_LOG = process.env.FAKE_PARALLEL_RESUME_LOG;
+const ORIGINAL_TRACE_UPLOAD = process.env.KODO_TRACE_UPLOAD;
+const ORIGINAL_TRACE_UPLOAD_TOKEN = process.env.KODO_TRACE_UPLOAD_ACCESS_TOKEN;
+const ORIGINAL_ENABLE_SESSION_RUNTIME = process.env.KODO_ENABLE_SESSION_RUNTIME;
+const ORIGINAL_FAKE_CURL_LOG = process.env.FAKE_CURL_LOG;
 
 function makeTempDir(prefix: string): string {
   const directory = path.join(
@@ -218,6 +223,21 @@ console.log(JSON.stringify({ type: "assistant", message: "GOAL_DONE: claude work
   writeExecutable(path.join(binDir, "claude"), script);
 }
 
+function installFakeCurl(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+
+const logFile = process.env.FAKE_CURL_LOG;
+if (logFile) {
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  fs.appendFileSync(logFile, JSON.stringify(process.argv.slice(2)) + "\\n", "utf8");
+}
+process.exit(0);
+`;
+  writeExecutable(path.join(binDir, "curl"), script);
+}
+
 function installFakeCursor(binDir: string): void {
   const script = `#!${process.execPath}
 const fs = require("node:fs");
@@ -270,7 +290,10 @@ console.log(JSON.stringify({ response: "GOAL_DONE: gemini worker finished", stat
   writeExecutable(path.join(binDir, "gemini"), script);
 }
 
-function projectFlags(projectDir: string, orchestrator = "codex:gpt-5.4"): {
+function projectFlags(
+  projectDir: string,
+  orchestrator = "codex:gpt-5.4",
+): {
   autoRefine: false;
   cycles: number;
   debug: false;
@@ -384,11 +407,33 @@ afterEach(() => {
   } else {
     process.env.FAKE_PARALLEL_RESUME_LOG = ORIGINAL_PARALLEL_RESUME_LOG;
   }
+  if (ORIGINAL_TRACE_UPLOAD === undefined) {
+    delete process.env.KODO_TRACE_UPLOAD;
+  } else {
+    process.env.KODO_TRACE_UPLOAD = ORIGINAL_TRACE_UPLOAD;
+  }
+  if (ORIGINAL_TRACE_UPLOAD_TOKEN === undefined) {
+    delete process.env.KODO_TRACE_UPLOAD_ACCESS_TOKEN;
+  } else {
+    process.env.KODO_TRACE_UPLOAD_ACCESS_TOKEN = ORIGINAL_TRACE_UPLOAD_TOKEN;
+  }
+  if (ORIGINAL_ENABLE_SESSION_RUNTIME === undefined) {
+    delete process.env.KODO_ENABLE_SESSION_RUNTIME;
+  } else {
+    process.env.KODO_ENABLE_SESSION_RUNTIME = ORIGINAL_ENABLE_SESSION_RUNTIME;
+  }
+  if (ORIGINAL_FAKE_CURL_LOG === undefined) {
+    delete process.env.FAKE_CURL_LOG;
+  } else {
+    process.env.FAKE_CURL_LOG = ORIGINAL_FAKE_CURL_LOG;
+  }
 });
 
 describe("runtime orchestration", () => {
   it("normalizes structured and marker done signals", () => {
-    expect(parseDoneDirective('{"done_signal":{"terminal":"goal_done","summary":"json done"}}')).toEqual({
+    expect(
+      parseDoneDirective('{"done_signal":{"terminal":"goal_done","summary":"json done"}}'),
+    ).toEqual({
       explicit: true,
       source: "json",
       summary: "json done",
@@ -793,7 +838,11 @@ describe("runtime orchestration", () => {
         {
           context: "Maintain the simple project.",
           stages: [
-            { index: 1, name: "Discover Follow-up", description: "Inspect the repo and determine any missing finalization work." },
+            {
+              index: 1,
+              name: "Discover Follow-up",
+              description: "Inspect the repo and determine any missing finalization work.",
+            },
           ],
         },
         null,
@@ -840,8 +889,16 @@ describe("runtime orchestration", () => {
         {
           context: "Maintain the simple project.",
           stages: [
-            { index: 1, name: "Early Finish", description: "Complete the goal immediately if possible." },
-            { index: 2, name: "Should Skip", description: "This stage should be skipped if the advisor ends the run." },
+            {
+              index: 1,
+              name: "Early Finish",
+              description: "Complete the goal immediately if possible.",
+            },
+            {
+              index: 2,
+              name: "Should Skip",
+              description: "This stage should be skipped if the advisor ends the run.",
+            },
             { index: 3, name: "Also Skip", description: "This stage should also be skipped." },
           ],
         },
@@ -905,7 +962,11 @@ describe("runtime orchestration", () => {
               parallel_group: 1,
               persist_changes: true,
             },
-            { index: 4, name: "Final Sequential", description: "Finish with a sequential stage after the parallel group." },
+            {
+              index: 4,
+              name: "Final Sequential",
+              description: "Finish with a sequential stage after the parallel group.",
+            },
           ],
         },
         null,
@@ -980,7 +1041,11 @@ describe("runtime orchestration", () => {
               description: "Run branch B in parallel.",
               parallel_group: 1,
             },
-            { index: 4, name: "Final Sequential", description: "Finish with a sequential stage after the parallel group." },
+            {
+              index: 4,
+              name: "Final Sequential",
+              description: "Finish with a sequential stage after the parallel group.",
+            },
           ],
         },
         null,
@@ -1083,8 +1148,18 @@ describe("runtime orchestration", () => {
         {
           context: "Maintain the simple project.",
           stages: [
-            { index: 1, name: "Parallel A", description: "Run branch A in parallel.", parallel_group: 1 },
-            { index: 2, name: "Parallel B", description: "Run branch B in parallel.", parallel_group: 1 },
+            {
+              index: 1,
+              name: "Parallel A",
+              description: "Run branch A in parallel.",
+              parallel_group: 1,
+            },
+            {
+              index: 2,
+              name: "Parallel B",
+              description: "Run branch B in parallel.",
+              parallel_group: 1,
+            },
           ],
         },
         null,
@@ -1139,6 +1214,50 @@ describe("runtime orchestration", () => {
     expect(existsSync(path.join(runDir.root, "conversations", "worker_fast_001.jsonl.gz"))).toBe(
       true,
     );
+  });
+
+  it("triggers trace upload during run teardown when enabled", () => {
+    const binDir = makeTempDir("trace-upload-bin");
+    installFakeCodex(binDir);
+    installFakeCurl(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+    process.env.KODO_ENABLE_SESSION_RUNTIME = "1";
+    process.env.KODO_TRACE_UPLOAD = "1";
+    process.env.KODO_TRACE_UPLOAD_ACCESS_TOKEN = "token-123";
+
+    const curlLog = path.join(makeTempDir("trace-upload-curl"), "curl.log");
+    process.env.FAKE_CURL_LOG = curlLog;
+
+    const projectDir = makeTempDir("trace-upload-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_trace_upload"));
+    init(runDir);
+
+    const result = executePendingRun(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Implement with teardown upload"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"event":"trace_upload_start"');
+    expect(log).toContain('"event":"trace_upload_end"');
+    expect(log).toContain('"uploaded":true');
+
+    const curlCalls = readFileSync(curlLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
+    expect(curlCalls).toHaveLength(2);
   });
 
   it("nudges claude-code workers until they emit a done directive", () => {
