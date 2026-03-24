@@ -28,6 +28,40 @@ type AcpNormalizerResult =
 type EventMapper = (params: JsonObject, raw: JsonObject) => AcpNormalizerResult;
 
 const EVENT_TIMEOUT_MS = 30_000;
+const AUTH_PATTERNS = new RegExp(
+  [
+    "unauthori[sz]ed",
+    "authentication failed",
+    "invalid.{0,20}(api.?key|token|credential)",
+    "401\\b",
+    "403\\b",
+    "forbidden",
+    "access denied",
+    "not authenticated",
+  ].join("|"),
+  "i",
+);
+const RATE_LIMIT_PATTERNS = new RegExp(
+  [
+    "quota exceeded",
+    "rate.?limit",
+    "usage.?limit",
+    "plan.?limit",
+    "429\\b",
+    "too many requests",
+  ].join("|"),
+  "i",
+);
+const SERVICE_PATTERNS = new RegExp(
+  [
+    "503\\b",
+    "service unavailable",
+    "temporar",
+    "overloaded",
+    "unavailable",
+  ].join("|"),
+  "i",
+);
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -147,7 +181,9 @@ function parseRuntimeError(value: JsonObject | null): AcpRuntimeError {
   }
 
   const code = stringField(value, "code");
-  const stableCode = (
+  const statusCode =
+    numberField(value, "statusCode") ?? numberField(value, "status_code") ?? undefined;
+  const stableCodes = (
     [
       "transport_start_failed",
       "transport_shutdown_failed",
@@ -164,16 +200,31 @@ function parseRuntimeError(value: JsonObject | null): AcpRuntimeError {
       "service_unavailable",
       "unsupported",
     ] as const
-  ).includes(code as AcpRuntimeErrorCode)
+  );
+  const combined = [
+    code,
+    stringField(value, "message"),
+    JSON.stringify(value.details ?? null),
+    JSON.stringify(value.data ?? null),
+  ]
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .join("\n");
+  const stableCode = stableCodes.includes(code as AcpRuntimeErrorCode)
     ? (code as AcpRuntimeErrorCode)
-    : "prompt_failed";
+    : statusCode === 401 || statusCode === 403 || AUTH_PATTERNS.test(combined)
+      ? "unauthorized"
+      : statusCode === 429 || RATE_LIMIT_PATTERNS.test(combined)
+        ? "rate_limited"
+        : statusCode === 502 || statusCode === 503 || statusCode === 504 || SERVICE_PATTERNS.test(combined)
+          ? "service_unavailable"
+          : "prompt_failed";
 
   return {
     code: stableCode,
     details: value,
     message: stringField(value, "message") ?? "ACP request failed.",
     retryable: booleanField(value, "retryable") ?? false,
-    statusCode: numberField(value, "statusCode") ?? numberField(value, "status_code") ?? undefined,
+    statusCode,
   };
 }
 

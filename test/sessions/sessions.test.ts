@@ -201,20 +201,53 @@ if (args[0] === "acp") {
         send({ jsonrpc: "2.0", method: "session.created", params: { backend: "gemini" } });
         return;
       }
+      if (mode === "auth") {
+        send({
+          jsonrpc: "2.0",
+          method: "error",
+          params: {
+            error: {
+              code: "permission_denied",
+              message: "401 unauthorized: missing Gemini API key",
+              statusCode: 401,
+            },
+          },
+        });
+        return;
+      }
+      if (mode === "rate") {
+        send({
+          jsonrpc: "2.0",
+          method: "error",
+          params: {
+            error: {
+              code: "resource_exhausted",
+              message: "quota exceeded for current project",
+              statusCode: 429,
+              retryable: true,
+            },
+          },
+        });
+        return;
+      }
       if (mode === "empty") {
         send({
           jsonrpc: "2.0",
           method: "usage",
-          params: { inputTokens: 2, outputTokens: 1 },
+          params: { inputTokens: 2, outputTokens: 1, costUsd: 0.002 },
         });
         send({
           jsonrpc: "2.0",
           method: "result",
           params: {
-            locator: { conversationId: "gemini-session-1" },
+            locator: {
+              conversationId: "gemini-session-1",
+              providerThreadId: "provider-thread-1",
+              serverSessionId: "server-session-1",
+            },
             stopReason: "completed",
             text: "",
-            usage: { inputTokens: 2, outputTokens: 1 },
+            usage: { inputTokens: 2, outputTokens: 1, costUsd: 0.002 },
           },
         });
         return;
@@ -224,16 +257,20 @@ if (args[0] === "acp") {
       send({
         jsonrpc: "2.0",
         method: "usage",
-        params: { inputTokens: 3, outputTokens: 2 },
+        params: { inputTokens: 3, outputTokens: 2, costUsd: 0.003 },
       });
       send({
         jsonrpc: "2.0",
         method: "result",
         params: {
-          locator: { conversationId: "gemini-session-1" },
+          locator: {
+            conversationId: "gemini-session-1",
+            providerThreadId: "provider-thread-1",
+            serverSessionId: "server-session-1",
+          },
           stopReason: "completed",
           text: prompt.includes("continue") ? "GOAL_DONE: Gemini resumed" : "GOAL_DONE: Gemini completed",
-          usage: { inputTokens: 3, outputTokens: 2 },
+          usage: { inputTokens: 3, outputTokens: 2, costUsd: 0.003 },
         },
       });
       return;
@@ -274,6 +311,7 @@ const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n", "utf8");
+  const mode = process.env.FAKE_OPENCODE_MODE || "success";
   if (message.method === "initialize") {
     send({
       id: message.id,
@@ -300,6 +338,20 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   }
   if (message.method === "prompt") {
     send({ id: message.id, jsonrpc: "2.0", result: { accepted: true } });
+    if (mode === "auth") {
+      send({
+        jsonrpc: "2.0",
+        method: "run.failed",
+        params: {
+          error: {
+            code: "permission_denied",
+            message: "403 forbidden from Gemini provider",
+            statusCode: 403,
+          },
+        },
+      });
+      return;
+    }
     send({
       jsonrpc: "2.0",
       method: "thread.created",
@@ -317,9 +369,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         thread: {
           id: "thread-9",
           providerThreadId: "provider-3",
+          serverSessionId: "server-opencode-3",
         },
         usage: {
           completion_tokens: 6,
+          costUsd: 0.004,
           prompt_tokens: 4,
         },
       },
@@ -339,6 +393,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.FAKE_CODEX_MODE;
   delete process.env.FAKE_GEMINI_MODE;
+  delete process.env.FAKE_OPENCODE_MODE;
   delete process.env.KODO_GEMINI_ACP_BACKEND;
   delete process.env.KODO_ENABLE_SESSION_RUNTIME;
   delete process.env.FAKE_AGENT_STATE_DIR;
@@ -574,6 +629,10 @@ describe("session adapters", () => {
     expect(first?.text).toContain("Gemini completed");
     expect(first?.inputTokens).toBe(3);
     expect(first?.outputTokens).toBe(2);
+    expect(first?.usageRaw).toEqual({ costUsd: 0.003, inputTokens: 3, outputTokens: 2 });
+    expect(first?.provider).toBe("gemini");
+    expect(first?.providerThreadId).toBe("provider-thread-1");
+    expect(first?.serverSessionId).toBe("server-session-1");
     expect(session?.sessionId).toBe("gemini-session-1");
 
     expect(second?.isError).toBe(false);
@@ -585,6 +644,12 @@ describe("session adapters", () => {
     expect(gunzipSync(readFileSync(conversationFile)).toString("utf8")).toContain(
       '"method":"session.created"',
     );
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"acp_backend":"gemini"');
+    expect(log).toContain('"provider":"gemini"');
+    expect(log).toContain('"provider_thread_id":"provider-thread-1"');
+    expect(log).toContain('"server_session_id":"server-session-1"');
+    expect(log).toContain('"usage_raw":{"inputTokens":3,"outputTokens":2,"costUsd":0.003}');
   });
 
   it("returns structured timeout and protocol failures for gemini ACP", () => {
@@ -612,6 +677,33 @@ describe("session adapters", () => {
     });
     expect(protocolError?.isError).toBe(true);
     expect(protocolError?.text).toContain("ACP protocol error");
+  });
+
+  it("classifies Gemini ACP auth and rate-limit failures with provider hints", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    useOnlyPath(binDir);
+
+    const projectDir = makeTempDir("kodo-project");
+    process.env.FAKE_GEMINI_MODE = "auth";
+    const authSession = createSessionForOrchestrator("gemini-cli", "gemini-3-flash");
+    const authError = authSession?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+    expect(authError?.isError).toBe(true);
+    expect(authError?.errorCode).toBe("unauthorized");
+    expect(authError?.text).toContain("GEMINI_API_KEY");
+
+    process.env.FAKE_GEMINI_MODE = "rate";
+    const rateSession = createSessionForOrchestrator("gemini-cli", "gemini-3-flash");
+    const rateError = rateSession?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+    expect(rateError?.isError).toBe(true);
+    expect(rateError?.errorCode).toBe("rate_limited");
+    expect(rateError?.text).toContain("Quota or rate limit");
   });
 
   it("handles empty terminal text from gemini ACP without forcing an error", () => {
@@ -652,10 +744,34 @@ describe("session adapters", () => {
     expect(result?.text).toContain("OpenCode completed");
     expect(result?.inputTokens).toBe(4);
     expect(result?.outputTokens).toBe(6);
+    expect(result?.provider).toBe("gemini");
+    expect(result?.providerThreadId).toBe("provider-3");
+    expect(result?.serverSessionId).toBe("server-opencode-3");
     expect(session?.sessionId).toBe("thread-9");
 
     const opencodeRequests = readFileSync(path.join(projectDir, "opencode-acp-requests.jsonl"), "utf8");
     expect(opencodeRequests).toContain('"method":"session.create"');
+  });
+
+  it("reports OpenCode ACP auth failures against Gemini credentials clearly", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    installFakeOpencode(binDir);
+    useOnlyPath(binDir);
+    process.env.KODO_GEMINI_ACP_BACKEND = "opencode";
+    process.env.FAKE_OPENCODE_MODE = "auth";
+
+    const projectDir = makeTempDir("kodo-project");
+    const session = createSessionForOrchestrator("gemini-cli", "gemini-2.5-flash");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(true);
+    expect(result?.errorCode).toBe("unauthorized");
+    expect(result?.text).toContain("opencode (Gemini provider)");
+    expect(result?.text).toContain("GEMINI_API_KEY");
   });
 });
 

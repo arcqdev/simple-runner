@@ -8,6 +8,58 @@ const DEFAULT_TIMEOUT_S = 7200;
 const MAX_BUFFER_BYTES = 50 * 1024 * 1024;
 const EVENT_TIMEOUT_MS = 30_000;
 const STARTUP_TIMEOUT_MS = 5_000;
+const ACP_PROVIDER_ENV_VARS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
+const STABLE_ACP_CODES = new Set([
+  "transport_start_failed",
+  "transport_shutdown_failed",
+  "initialize_failed",
+  "capability_mismatch",
+  "session_create_failed",
+  "session_resume_failed",
+  "prompt_rejected",
+  "prompt_failed",
+  "stream_protocol_error",
+  "timeout",
+  "unauthorized",
+  "rate_limited",
+  "service_unavailable",
+  "unsupported",
+]);
+const AUTH_PATTERNS = new RegExp(
+  [
+    "unauthori[sz]ed",
+    "authentication failed",
+    "invalid.{0,20}(api.?key|token|credential)",
+    "401\\b",
+    "403\\b",
+    "forbidden",
+    "access denied",
+    "not authenticated",
+  ].join("|"),
+  "i",
+);
+const RATE_LIMIT_PATTERNS = new RegExp(
+  [
+    "quota exceeded",
+    "rate.?limit",
+    "usage.?limit",
+    "plan.?limit",
+    "429\\b",
+    "too many requests",
+  ].join("|"),
+  "i",
+);
+const SERVICE_PATTERNS = new RegExp(
+  [
+    "503\\b",
+    "service unavailable",
+    "connection refused",
+    "temporar",
+    "overloaded",
+    "unavailable",
+  ].join("|"),
+  "i",
+);
 
 function toRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
@@ -26,6 +78,20 @@ function booleanField(value, key) {
 function numberField(value, key) {
   const candidate = value?.[key];
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : 0;
+}
+
+function stringifyUnknown(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
 }
 
 function parseJsonLines(text) {
@@ -407,12 +473,41 @@ function parseAcpError(value, fallbackCode = "prompt_failed", fallbackMessage = 
     };
   }
 
+  const statusCode =
+    numberField(record, "statusCode") || numberField(record, "status_code") || undefined;
+  const combined = [
+    stringField(record, "code"),
+    stringField(record, "message"),
+    stringifyUnknown(record.details),
+    stringifyUnknown(record.data),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  let code = stringField(record, "code") ?? fallbackCode;
+
+  if (!STABLE_ACP_CODES.has(code)) {
+    if (statusCode === 401 || statusCode === 403 || AUTH_PATTERNS.test(combined)) {
+      code = "unauthorized";
+    } else if (statusCode === 429 || RATE_LIMIT_PATTERNS.test(combined)) {
+      code = "rate_limited";
+    } else if (
+      statusCode === 502 ||
+      statusCode === 503 ||
+      statusCode === 504 ||
+      SERVICE_PATTERNS.test(combined)
+    ) {
+      code = "service_unavailable";
+    } else {
+      code = fallbackCode;
+    }
+  }
+
   return {
-    code: stringField(record, "code") ?? fallbackCode,
+    code,
     details: record,
     message: stringField(record, "message") ?? fallbackMessage,
     retryable: booleanField(record, "retryable") ?? false,
-    statusCode: numberField(record, "statusCode") || numberField(record, "status_code") || undefined,
+    statusCode,
   };
 }
 
@@ -424,6 +519,8 @@ function acpProfiles(payload) {
 
   return {
     selected,
+    provider: "gemini",
+    providerEnvVars: ACP_PROVIDER_ENV_VARS,
     profile:
       selected === "opencode"
         ? {
@@ -439,6 +536,19 @@ function acpProfiles(payload) {
             costBucket: "gemini_api",
           },
   };
+}
+
+function requestFailureCode(method) {
+  switch (method) {
+    case "initialize":
+      return "initialize_failed";
+    case "session.create":
+      return "session_create_failed";
+    case "session.resume":
+      return "session_resume_failed";
+    default:
+      return "prompt_failed";
+  }
 }
 
 class LineTransport {
@@ -651,7 +761,7 @@ class LineTransport {
         pending.reject(
           parseAcpError(
             record.error,
-            pending.method === "session.resume" ? "session_resume_failed" : "prompt_failed",
+            requestFailureCode(pending.method),
           ),
         );
         return;
@@ -1071,16 +1181,23 @@ async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
   }
 }
 
-function formatAcpError(error, backendLabel, timeoutS) {
+function formatAcpError(error, profileInfo, timeoutS) {
+  const backendLabel =
+    profileInfo.selected === "opencode" ? "opencode (Gemini provider)" : "gemini";
+  const credentialHint = `check ${profileInfo.providerEnvVars.join(" or ")} or your login status.`;
   switch (error?.code) {
     case "timeout":
       return `${backendLabel}: Process timed out after ${timeoutS}s. Hint: increase session_timeout_s in TeamConfig.`;
     case "unauthorized":
-      return `${backendLabel}: Authentication failed — check your API key or login status.`;
+      return `${backendLabel}: Authentication failed — ${credentialHint}`;
     case "rate_limited":
-      return `${backendLabel}: Subscription/billing issue — check your account status.`;
+      return `${backendLabel}: Quota or rate limit reached — check billing, quota, or retry later.`;
     case "service_unavailable":
       return `${backendLabel}: Service unavailable — try again later.`;
+    case "transport_start_failed":
+      return `${backendLabel}: ACP transport failed to start. Check that the CLI is installed and on PATH.`;
+    case "transport_shutdown_failed":
+      return `${backendLabel}: ACP transport exited unexpectedly. ${error.message}`;
     case "session_resume_failed":
       return `${backendLabel}: Failed to resume session. ${error.message}`;
     case "stream_protocol_error":
@@ -1091,7 +1208,8 @@ function formatAcpError(error, backendLabel, timeoutS) {
 }
 
 async function runAcpQuery(payload) {
-  const { profile } = acpProfiles(payload);
+  const profileInfo = acpProfiles(payload);
+  const { profile } = profileInfo;
   const transport = new LineTransport({
     args: profile.args,
     command: profile.command,
@@ -1199,28 +1317,42 @@ async function runAcpQuery(payload) {
     if (!outcome.ok) {
       const finalLocator = outcome.locator ?? locator;
       return {
+        acpBackend: profileInfo.selected,
         conversationLog: null,
         costBucket: profile.costBucket,
         elapsedS,
+        errorCode: outcome.error.code ?? null,
+        errorDetails: outcome.error.details ?? null,
         inputTokens: outcome.usage?.inputTokens ?? null,
         isError: true,
         outputTokens: outcome.usage?.outputTokens ?? null,
+        provider: profileInfo.provider,
+        providerEnvVars: profileInfo.providerEnvVars,
+        providerThreadId: finalLocator?.providerThreadId ?? null,
         rawMessages,
+        serverSessionId: finalLocator?.serverSessionId ?? null,
         sessionId: finalLocator?.conversationId ?? payload.resumeSessionId ?? null,
-        text: formatAcpError(outcome.error, payload.backend, timeoutS),
+        text: formatAcpError(outcome.error, profileInfo, timeoutS),
         usageRaw: outcome.usage?.raw ?? null,
       };
     }
 
     const finalLocator = outcome.result.locator ?? locator;
     return {
+      acpBackend: profileInfo.selected,
       conversationLog: null,
       costBucket: profile.costBucket,
       elapsedS,
+      errorCode: null,
+      errorDetails: null,
       inputTokens: outcome.usage?.inputTokens ?? null,
       isError: outcome.result.stopReason === "failed" || outcome.result.stopReason === "timed_out",
       outputTokens: outcome.usage?.outputTokens ?? null,
+      provider: profileInfo.provider,
+      providerEnvVars: profileInfo.providerEnvVars,
+      providerThreadId: finalLocator?.providerThreadId ?? null,
       rawMessages,
+      serverSessionId: finalLocator?.serverSessionId ?? null,
       sessionId: finalLocator?.conversationId ?? payload.resumeSessionId ?? null,
       text: outcome.result.text ?? "",
       usageRaw: outcome.usage?.raw ?? null,

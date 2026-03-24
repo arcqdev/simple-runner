@@ -23,12 +23,19 @@ export type TeamSessionBackend =
   | "opencode";
 
 export type SessionQueryResult = {
+  acpBackend?: "gemini" | "opencode" | null;
   conversationLog?: string | null;
   costBucket?: string;
   elapsedS: number;
+  errorCode?: string | null;
+  errorDetails?: JsonObject | null;
   inputTokens?: number | null;
   isError: boolean;
   outputTokens?: number | null;
+  provider?: string | null;
+  providerEnvVars?: string[] | null;
+  providerThreadId?: string | null;
+  serverSessionId?: string | null;
   text: string;
   usageRaw?: JsonObject | null;
 };
@@ -85,11 +92,18 @@ type SpawnResult = {
 };
 
 type ParsedQueryOutput = {
+  acpBackend?: "gemini" | "opencode" | null;
+  errorCode?: string | null;
+  errorDetails?: JsonObject | null;
   inputTokens?: number;
   isError?: boolean;
   outputTokens?: number;
+  provider?: string | null;
+  providerEnvVars?: string[] | null;
+  providerThreadId?: string | null;
   rawMessages?: unknown[] | null;
   resultText: string;
+  serverSessionId?: string | null;
   sessionId?: string | null;
   usageRaw?: JsonObject | null;
 };
@@ -791,35 +805,55 @@ class SubprocessSession implements Session {
 
     emitLogEvent("session_query_end", {
       agent: options.agentName,
+      acp_backend: helperResult.acpBackend ?? this.#acpBackend,
       conversation_log: conversationLog,
       cost_bucket: this.costBucket,
-      session: this.backend,
-      model: this.model,
       elapsed_s: helperResult.elapsedS,
+      error_code: helperResult.errorCode ?? null,
+      error_details: helperResult.errorDetails ?? null,
       is_error: helperResult.isError,
+      model: this.model,
+      provider: helperResult.provider ?? null,
+      provider_env_vars: helperResult.providerEnvVars ?? null,
+      provider_thread_id: helperResult.providerThreadId ?? null,
       [this.#definition.sessionIdField]: this.#sessionId,
+      server_session_id: helperResult.serverSessionId ?? null,
+      session: this.backend,
       input_tokens: helperResult.inputTokens,
       output_tokens: helperResult.outputTokens,
       response_text: helperResult.text,
       returncode: helperResult.isError ? 1 : 0,
       signal: null,
+      usage_raw: helperResult.usageRaw ?? null,
     });
 
     if (helperResult.isError) {
       emitLogEvent("session_query_error", {
-        session: this.backend,
+        acp_backend: helperResult.acpBackend ?? this.#acpBackend,
+        error_code: helperResult.errorCode ?? null,
+        error_details: helperResult.errorDetails ?? null,
         model: this.model,
         error: helperResult.text,
+        provider: helperResult.provider ?? null,
+        provider_env_vars: helperResult.providerEnvVars ?? null,
+        session: this.backend,
       });
     }
 
     return {
+      acpBackend: helperResult.acpBackend ?? this.#acpBackend,
       conversationLog,
       costBucket: this.costBucket,
       elapsedS: helperResult.elapsedS,
+      errorCode: helperResult.errorCode ?? null,
+      errorDetails: helperResult.errorDetails ?? null,
       inputTokens: helperResult.inputTokens ?? null,
       isError: helperResult.isError,
       outputTokens: helperResult.outputTokens ?? null,
+      provider: helperResult.provider ?? null,
+      providerEnvVars: helperResult.providerEnvVars ?? null,
+      providerThreadId: helperResult.providerThreadId ?? null,
+      serverSessionId: helperResult.serverSessionId ?? null,
       text: helperResult.text.trim(),
       usageRaw: helperResult.usageRaw ?? null,
     };

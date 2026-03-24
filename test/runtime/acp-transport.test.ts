@@ -256,6 +256,54 @@ describe("acp normalization", () => {
     });
   });
 
+  it("infers stable auth and rate-limit codes from provider-shaped ACP errors", () => {
+    const auth = normalizeAcpEvent(
+      "gemini",
+      rawEnvelope("error", {
+        error: {
+          code: "permission_denied",
+          message: "401 unauthorized: missing API key",
+          statusCode: 401,
+        },
+      }),
+    );
+    const rate = normalizeAcpEvent(
+      "opencode",
+      rawEnvelope("run.failed", {
+        error: {
+          code: "resource_exhausted",
+          message: "quota exceeded for current project",
+          statusCode: 429,
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(auth).toMatchObject({
+      ok: true,
+      value: {
+        event: {
+          error: {
+            code: "unauthorized",
+          },
+          type: "error",
+        },
+      },
+    });
+    expect(rate).toMatchObject({
+      ok: true,
+      value: {
+        event: {
+          error: {
+            code: "rate_limited",
+            retryable: true,
+          },
+          type: "error",
+        },
+      },
+    });
+  });
+
   it("collects terminal success from streamed notifications", async () => {
     const envelopes = [
       {

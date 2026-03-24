@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
 import { safeJoin } from "../runtime/fs.js";
 
 export type RunState = {
   agentStats: Record<string, AgentStats>;
+  agentSessionDetails: Record<string, AgentSessionInfo>;
   agentSessionIds: Record<string, string>;
   completedCycles: number;
   completedStages: number[];
@@ -37,6 +39,14 @@ export type RunState = {
 };
 
 type RunEvent = Record<string, unknown>;
+type AgentSessionInfo = {
+  acpBackend: string | null;
+  provider: string | null;
+  providerEnvVars: string[];
+  providerThreadId: string | null;
+  serverSessionId: string | null;
+  sessionId: string;
+};
 type AgentStats = {
   calls: number;
   conversationLogs: string[];
@@ -106,6 +116,17 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
+function sessionInfoFromEvent(event: RunEvent, sessionId: string): AgentSessionInfo {
+  return {
+    acpBackend: stringField(event, "acp_backend"),
+    provider: stringField(event, "provider"),
+    providerEnvVars: stringList(event.provider_env_vars),
+    providerThreadId: stringField(event, "provider_thread_id"),
+    serverSessionId: stringField(event, "server_session_id"),
+    sessionId,
+  };
+}
+
 function inferCostBucketFromName(name: string): string {
   const normalized = name.toLowerCase();
   if (normalized === "api") {
@@ -149,10 +170,16 @@ export function parseRun(logFile: string): RunState | null {
   let currentStageCycles = 0;
   let currentStageIndex: number | null = null;
   let pendingSessionId: string | null = null;
+  let pendingSessionInfo: AgentSessionInfo | null = null;
+  let pendingSessionInputTokens: number | null = null;
+  let pendingSessionOutputTokens: number | null = null;
+  let pendingSessionIsError: boolean | null = null;
   const agentSessionIds: Record<string, string> = {};
+  const agentSessionDetails: Record<string, AgentSessionInfo> = {};
   let pendingExchanges: Array<Record<string, unknown>> = [];
   let parallelStageState: Record<string, Record<string, unknown>> = {};
   const sessionIdsByName: Record<string, string> = {};
+  const sessionDetailsByName: Record<string, AgentSessionInfo> = {};
   const stageSummaries: string[] = [];
   const agentStats: Record<string, AgentStats> = {};
   const conversationArtifacts = new Set<string>();
@@ -206,11 +233,20 @@ export function parseRun(logFile: string): RunState | null {
       case "session_query_end":
         pendingSessionId = stringField(event, "session_id") ?? stringField(event, "chat_id");
         pendingConversationLog = stringField(event, "conversation_log");
+        pendingSessionInfo =
+          pendingSessionId === null ? null : sessionInfoFromEvent(event, pendingSessionId);
+        pendingSessionInputTokens = numberField(event, "input_tokens");
+        pendingSessionOutputTokens = numberField(event, "output_tokens");
+        pendingSessionIsError = typeof event.is_error === "boolean" ? event.is_error : null;
         {
           const sessionName = stringField(event, "session");
           if (sessionName !== null && pendingSessionId !== null) {
             sessionIdsByName[sessionName] = pendingSessionId;
             agentSessionIds[sessionName] = pendingSessionId;
+            if (pendingSessionInfo !== null) {
+              sessionDetailsByName[sessionName] = pendingSessionInfo;
+              agentSessionDetails[sessionName] = pendingSessionInfo;
+            }
           }
         }
         break;
@@ -218,6 +254,9 @@ export function parseRun(logFile: string): RunState | null {
         if (typeof event.agent === "string" && event.agent.length > 0) {
           if (pendingSessionId !== null) {
             agentSessionIds[event.agent] = pendingSessionId;
+            if (pendingSessionInfo !== null) {
+              agentSessionDetails[event.agent] = pendingSessionInfo;
+            }
           }
           for (const sessionName of genericSessionNames) {
             const sessionId = sessionIdsByName[sessionName];
@@ -225,6 +264,12 @@ export function parseRun(logFile: string): RunState | null {
               agentSessionIds[event.agent] = sessionId;
               delete sessionIdsByName[sessionName];
               delete agentSessionIds[sessionName];
+              const sessionInfo = sessionDetailsByName[sessionName];
+              if (sessionInfo !== undefined) {
+                agentSessionDetails[event.agent] = sessionInfo;
+                delete sessionDetailsByName[sessionName];
+                delete agentSessionDetails[sessionName];
+              }
             }
           }
           const bucket =
@@ -232,9 +277,14 @@ export function parseRun(logFile: string): RunState | null {
           const stats = agentStats[event.agent] ?? emptyAgentStats(bucket);
           stats.calls += 1;
           stats.elapsedS += numberField(event, "elapsed_s") ?? 0;
-          stats.errors += event.is_error === true ? 1 : 0;
-          stats.inputTokens += numberField(event, "input_tokens") ?? 0;
-          stats.outputTokens += numberField(event, "output_tokens") ?? 0;
+          stats.errors +=
+            event.is_error === true || (event.is_error !== false && pendingSessionIsError === true)
+              ? 1
+              : 0;
+          stats.inputTokens +=
+            numberField(event, "input_tokens") ?? pendingSessionInputTokens ?? 0;
+          stats.outputTokens +=
+            numberField(event, "output_tokens") ?? pendingSessionOutputTokens ?? 0;
           if (bucket.length > 0) {
             stats.costBucket = bucket;
           }
@@ -247,6 +297,10 @@ export function parseRun(logFile: string): RunState | null {
         }
         pendingSessionId = null;
         pendingConversationLog = null;
+        pendingSessionInfo = null;
+        pendingSessionInputTokens = null;
+        pendingSessionOutputTokens = null;
+        pendingSessionIsError = null;
         break;
       case "orchestrator_response":
         orchestratorCostBucket = stringField(event, "cost_bucket") ?? orchestratorCostBucket;
@@ -341,6 +395,7 @@ export function parseRun(logFile: string): RunState | null {
 
   return {
     agentStats,
+    agentSessionDetails,
     agentSessionIds,
     completedCycles,
     completedStages,

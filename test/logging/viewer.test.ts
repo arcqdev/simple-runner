@@ -91,6 +91,7 @@ describe("viewer", () => {
     expect(html).toContain("project_name");
     expect(html).toContain("conversation_count");
     expect(html).toContain("total_agent_calls");
+    expect(html).toContain("agent_session_details");
     expect(html).toContain("agent_stats");
     expect(html).toContain("orchestrator_bucket_breakdown");
   });

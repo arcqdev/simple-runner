@@ -1124,16 +1124,23 @@ function runVerification(
     });
     emitLogEvent("agent_run_end", {
       agent: agent.name,
+      acp_backend: response.acpBackend ?? null,
       conversation_log: response.conversationLog,
       cost_bucket: agent.session.costBucket,
       elapsed_s: response.elapsedS,
+      error_code: response.errorCode ?? null,
       input_tokens: response.inputTokens,
       is_error: response.isError,
       output_tokens: response.outputTokens,
+      provider: response.provider ?? null,
+      provider_env_vars: response.providerEnvVars ?? null,
+      provider_thread_id: response.providerThreadId ?? null,
       response_text: response.text,
+      server_session_id: response.serverSessionId ?? null,
       session_queries: agent.session.stats.queries,
       session_tokens: agent.session.stats.totalInputTokens + agent.session.stats.totalOutputTokens,
       status: response.isError ? "failed" : "completed",
+      usage_raw: response.usageRaw ?? null,
     });
     if (response.isError || !verificationPassed(response.text)) {
       issues.push(
@@ -1159,16 +1166,23 @@ function runVerification(
         });
         emitLogEvent("agent_run_end", {
           agent: fallback.name,
+          acp_backend: response.acpBackend ?? null,
           conversation_log: response.conversationLog,
           cost_bucket: verifier.costBucket,
           elapsed_s: response.elapsedS,
+          error_code: response.errorCode ?? null,
           input_tokens: response.inputTokens,
           is_error: response.isError,
           output_tokens: response.outputTokens,
+          provider: response.provider ?? null,
+          provider_env_vars: response.providerEnvVars ?? null,
+          provider_thread_id: response.providerThreadId ?? null,
           response_text: response.text,
+          server_session_id: response.serverSessionId ?? null,
           session_queries: verifier.stats.queries,
           session_tokens: verifier.stats.totalInputTokens + verifier.stats.totalOutputTokens,
           status: response.isError ? "failed" : "completed",
+          usage_raw: response.usageRaw ?? null,
         });
         if (response.isError || !verificationPassed(response.text)) {
           issues.push(
@@ -1641,18 +1655,25 @@ abstract class RuntimeOrchestratorBase {
 
           emitLogEvent("agent_run_end", {
             agent: stageRuntime.worker.name,
+            acp_backend: queryResult.acpBackend ?? null,
             conversation_log: queryResult.conversationLog,
             cost_bucket: stageRuntime.worker.session.costBucket,
             elapsed_s: queryResult.elapsedS,
+            error_code: queryResult.errorCode ?? null,
             input_tokens: queryResult.inputTokens,
             is_error: queryResult.isError,
             output_tokens: queryResult.outputTokens,
+            provider: queryResult.provider ?? null,
+            provider_env_vars: queryResult.providerEnvVars ?? null,
+            provider_thread_id: queryResult.providerThreadId ?? null,
             response_text: queryResult.text,
+            server_session_id: queryResult.serverSessionId ?? null,
             session_queries: stageRuntime.worker.session.stats.queries,
             session_tokens:
               stageRuntime.worker.session.stats.totalInputTokens +
               stageRuntime.worker.session.stats.totalOutputTokens,
             status: queryResult.isError ? "failed" : "completed",
+            usage_raw: queryResult.usageRaw ?? null,
           });
           updateAgentStats(
             state,
@@ -2123,17 +2144,24 @@ abstract class RuntimeOrchestratorBase {
     });
     emitLogEvent("agent_run_end", {
       agent: worker.name,
+      acp_backend: outcome.response.acpBackend ?? null,
       conversation_log: outcome.response.conversationLog,
       cost_bucket: worker.session.costBucket,
       elapsed_s: outcome.response.elapsedS,
+      error_code: outcome.response.errorCode ?? null,
       input_tokens: outcome.response.inputTokens,
       is_error: outcome.response.isError,
       output_tokens: outcome.response.outputTokens,
+      provider: outcome.response.provider ?? null,
+      provider_env_vars: outcome.response.providerEnvVars ?? null,
+      provider_thread_id: outcome.response.providerThreadId ?? null,
       response_text: outcome.response.text,
+      server_session_id: outcome.response.serverSessionId ?? null,
       session_queries: worker.session.stats.queries,
       session_tokens:
         worker.session.stats.totalInputTokens + worker.session.stats.totalOutputTokens,
       status: outcome.response.isError ? "failed" : "completed",
+      usage_raw: outcome.response.usageRaw ?? null,
     });
     updateAgentStats(state, worker.name, outcome.response, worker.session);
 

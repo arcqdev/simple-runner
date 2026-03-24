@@ -34,6 +34,7 @@ type ViewerServer = {
 };
 
 type ViewerIndexRun = {
+  agent_session_details: Record<string, ViewerSessionDetail>;
   agent_stats: ViewerIndexAgentStat[];
   completed_stage_count: number;
   conversation_count: number;
@@ -86,6 +87,15 @@ type ViewerIndexBucketStat = {
   error_count: number;
   input_tokens: number;
   output_tokens: number;
+};
+
+type ViewerSessionDetail = {
+  acp_backend: string | null;
+  provider: string | null;
+  provider_env_vars: string[];
+  provider_thread_id: string | null;
+  server_session_id: string | null;
+  session_id: string;
 };
 
 function cleanupStaleViewerFiles(now = Date.now()): void {
@@ -148,6 +158,19 @@ function loadRunLog(runId: string): string {
 
 function buildRunIndex(): ViewerIndexRun[] {
   return listRuns().map((run) => ({
+    agent_session_details: Object.fromEntries(
+      Object.entries(run.agentSessionDetails).map(([agent, detail]) => [
+        agent,
+        {
+          acp_backend: detail.acpBackend,
+          provider: detail.provider,
+          provider_env_vars: detail.providerEnvVars,
+          provider_thread_id: detail.providerThreadId,
+          server_session_id: detail.serverSessionId,
+          session_id: detail.sessionId,
+        },
+      ]),
+    ),
     agent_stats: Object.entries(run.agentStats)
       .map(([agent, stats]) => ({
         agent,

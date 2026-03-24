@@ -76,6 +76,19 @@ function normalizeErrorDetails(value: unknown): JsonObject | null {
   return isJsonObject(value) ? value : null;
 }
 
+function requestFailureCode(method: string): AcpRuntimeErrorCode {
+  switch (method) {
+    case "initialize":
+      return "initialize_failed";
+    case "session.create":
+      return "session_create_failed";
+    case "session.resume":
+      return "session_resume_failed";
+    default:
+      return "prompt_failed";
+  }
+}
+
 export class StdioAcpTransport {
   readonly #config: AcpTransportConfig;
   #child: ChildProcessWithoutNullStreams | null = null;
@@ -340,13 +353,16 @@ export class StdioAcpTransport {
       if (errorDetails !== null) {
         pending.reject(
           runtimeError(
-            "prompt_failed",
+            requestFailureCode(pending.method),
             stringField(errorDetails, "message") ??
               `ACP request '${pending.method}' failed without a message.`,
             {
               details: errorDetails,
               retryable: false,
-              statusCode: numberField(errorDetails, "code") ?? undefined,
+              statusCode:
+                numberField(errorDetails, "statusCode") ??
+                numberField(errorDetails, "status_code") ??
+                undefined,
             },
           ),
         );
