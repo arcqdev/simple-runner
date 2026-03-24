@@ -125,6 +125,127 @@ if (args.includes("--version")) {
   console.log("gemini 1.0.0");
   process.exit(0);
 }
+if (args[0] === "acp") {
+  const { createInterface } = require("node:readline");
+  const rl = createInterface({ input: process.stdin });
+  const mode = process.env.FAKE_GEMINI_MODE || "success";
+  const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+  fs.mkdirSync(stateDir, { recursive: true });
+  const requestLog = path.join(stateDir, "gemini-acp-requests.jsonl");
+  const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+  const appendRequest = (message) => fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n", "utf8");
+
+  rl.on("line", (line) => {
+    const message = JSON.parse(line);
+    appendRequest(message);
+
+    if (message.method === "initialize") {
+      send({
+        id: message.id,
+        jsonrpc: "2.0",
+        result: {
+          capabilities: {
+            initialize: true,
+            prompt: true,
+            protocolVersion: "0.1",
+            resume: true,
+            serverName: "fake-gemini-acp",
+            sessionLifecycle: true,
+            serverVersion: "1.0.0",
+            streaming: true,
+            usage: true,
+          },
+        },
+      });
+      return;
+    }
+
+    if (message.method === "session.create") {
+      send({
+        id: message.id,
+        jsonrpc: "2.0",
+        result: { locator: { conversationId: "gemini-session-1" } },
+      });
+      return;
+    }
+
+    if (message.method === "session.resume") {
+      const resumed = message.params?.locator?.conversationId || "unknown";
+      send({
+        id: message.id,
+        jsonrpc: "2.0",
+        result: { locator: { conversationId: resumed } },
+      });
+      return;
+    }
+
+    if (message.method === "prompt") {
+      send({ id: message.id, jsonrpc: "2.0", result: { accepted: true } });
+      const prompt = message.params?.prompt || "";
+      const resumed = fs.readFileSync(requestLog, "utf8").includes('"method":"session.resume"');
+      send({
+        jsonrpc: "2.0",
+        method: resumed ? "session.resumed" : "session.created",
+        params: {
+          backend: "gemini",
+          locator: { conversationId: resumed ? "gemini-session-1" : "gemini-session-1" },
+          model: "gemini-3-flash",
+        },
+      });
+
+      if (mode === "timeout") {
+        send({ jsonrpc: "2.0", method: "message.delta", params: { delta: "waiting" } });
+        return;
+      }
+      if (mode === "protocol") {
+        send({ jsonrpc: "2.0", method: "session.created", params: { backend: "gemini" } });
+        return;
+      }
+      if (mode === "empty") {
+        send({
+          jsonrpc: "2.0",
+          method: "usage",
+          params: { inputTokens: 2, outputTokens: 1 },
+        });
+        send({
+          jsonrpc: "2.0",
+          method: "result",
+          params: {
+            locator: { conversationId: "gemini-session-1" },
+            stopReason: "completed",
+            text: "",
+            usage: { inputTokens: 2, outputTokens: 1 },
+          },
+        });
+        return;
+      }
+
+      send({ jsonrpc: "2.0", method: "message.delta", params: { delta: "working " } });
+      send({
+        jsonrpc: "2.0",
+        method: "usage",
+        params: { inputTokens: 3, outputTokens: 2 },
+      });
+      send({
+        jsonrpc: "2.0",
+        method: "result",
+        params: {
+          locator: { conversationId: "gemini-session-1" },
+          stopReason: "completed",
+          text: prompt.includes("continue") ? "GOAL_DONE: Gemini resumed" : "GOAL_DONE: Gemini completed",
+          usage: { inputTokens: 3, outputTokens: 2 },
+        },
+      });
+      return;
+    }
+
+    if (message.method === "shutdown") {
+      send({ id: message.id, jsonrpc: "2.0", result: {} });
+      process.exit(0);
+    }
+  });
+  return;
+}
 const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
 fs.mkdirSync(stateDir, { recursive: true });
 fs.writeFileSync(path.join(stateDir, "gemini-argv.json"), JSON.stringify(args), "utf8");
@@ -133,10 +254,94 @@ console.log(JSON.stringify({ response: "GOAL_DONE: Gemini completed", stats: { m
   writeExecutable(path.join(binDir, "gemini"), script);
 }
 
+function installFakeOpencode(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const { createInterface } = require("node:readline");
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("opencode 0.1.0");
+  process.exit(0);
+}
+if (args[0] !== "acp") {
+  process.exit(1);
+}
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+fs.mkdirSync(stateDir, { recursive: true });
+const requestLog = path.join(stateDir, "opencode-acp-requests.jsonl");
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  fs.appendFileSync(requestLog, JSON.stringify(message) + "\\n", "utf8");
+  if (message.method === "initialize") {
+    send({
+      id: message.id,
+      jsonrpc: "2.0",
+      result: {
+        capabilities: {
+          initialize: true,
+          prompt: true,
+          protocolVersion: "0.1",
+          resume: true,
+          serverName: "fake-opencode-acp",
+          sessionLifecycle: true,
+          serverVersion: "1.0.0",
+          streaming: true,
+          usage: true,
+        },
+      },
+    });
+    return;
+  }
+  if (message.method === "session.create") {
+    send({ id: message.id, jsonrpc: "2.0", result: { locator: { conversationId: "thread-9" } } });
+    return;
+  }
+  if (message.method === "prompt") {
+    send({ id: message.id, jsonrpc: "2.0", result: { accepted: true } });
+    send({
+      jsonrpc: "2.0",
+      method: "thread.created",
+      params: {
+        id: "thread-9",
+        model: "gemini-2.5-flash",
+      },
+    });
+    send({
+      jsonrpc: "2.0",
+      method: "run.completed",
+      params: {
+        output: "GOAL_DONE: OpenCode completed",
+        status: "completed",
+        thread: {
+          id: "thread-9",
+          providerThreadId: "provider-3",
+        },
+        usage: {
+          completion_tokens: 6,
+          prompt_tokens: 4,
+        },
+      },
+    });
+    return;
+  }
+  if (message.method === "shutdown") {
+    send({ id: message.id, jsonrpc: "2.0", result: {} });
+    process.exit(0);
+  }
+});
+`;
+  writeExecutable(path.join(binDir, "opencode"), script);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.FAKE_CODEX_MODE;
+  delete process.env.FAKE_GEMINI_MODE;
+  delete process.env.KODO_GEMINI_ACP_BACKEND;
   delete process.env.KODO_ENABLE_SESSION_RUNTIME;
+  delete process.env.FAKE_AGENT_STATE_DIR;
   process.env.PATH = ORIGINAL_PATH;
 });
 
@@ -323,12 +528,134 @@ describe("session adapters", () => {
     );
 
     const gemini = createSessionForOrchestrator("gemini-cli", "gemini-3-flash", {
-      resumeSessionId: "last",
+      resumeSessionId: "gemini-session-1",
     });
     gemini?.query("ship it", { maxTurns: 1, projectDir });
-    expect(JSON.parse(readFileSync(path.join(projectDir, "gemini-argv.json"), "utf8"))).toEqual(
-      expect.arrayContaining(["--resume"]),
+    const geminiRequests = readFileSync(path.join(projectDir, "gemini-acp-requests.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(geminiRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "session.resume",
+          params: expect.objectContaining({
+            locator: { conversationId: "gemini-session-1" },
+          }),
+        }),
+      ]),
     );
+  });
+
+  it("runs gemini-cli sessions through ACP, preserves resume state, and saves conversations", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    useOnlyPath(binDir);
+
+    const projectDir = makeTempDir("kodo-project");
+    const runDir = RunDir.create(projectDir, "gemini_acp_test");
+    init(runDir);
+
+    const session = createSessionForOrchestrator("gemini-cli", "gemini-3-flash");
+    const first = session?.query("ship it", {
+      agentName: "worker_fast",
+      maxTurns: 2,
+      projectDir,
+      queryIndex: 1,
+    });
+    const second = session?.query("continue", {
+      agentName: "worker_fast",
+      maxTurns: 2,
+      projectDir,
+      queryIndex: 2,
+    });
+
+    expect(first?.isError).toBe(false);
+    expect(first?.text).toContain("Gemini completed");
+    expect(first?.inputTokens).toBe(3);
+    expect(first?.outputTokens).toBe(2);
+    expect(session?.sessionId).toBe("gemini-session-1");
+
+    expect(second?.isError).toBe(false);
+    expect(second?.text).toContain("Gemini resumed");
+    expect(second?.conversationLog).toBe("conversations/worker_fast_002.jsonl.gz");
+
+    const conversationFile = path.join(runDir.root, first?.conversationLog ?? "");
+    expect(existsSync(conversationFile)).toBe(true);
+    expect(gunzipSync(readFileSync(conversationFile)).toString("utf8")).toContain(
+      '"method":"session.created"',
+    );
+  });
+
+  it("returns structured timeout and protocol failures for gemini ACP", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    useOnlyPath(binDir);
+
+    const projectDir = makeTempDir("kodo-project");
+    process.env.FAKE_GEMINI_MODE = "timeout";
+    const timeoutSession = createSessionForOrchestrator("gemini-cli", "gemini-3-flash", {
+      timeoutS: 1,
+    });
+    const timedOut = timeoutSession?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+    expect(timedOut?.isError).toBe(true);
+    expect(timedOut?.text).toContain("timed out");
+
+    process.env.FAKE_GEMINI_MODE = "protocol";
+    const protocolSession = createSessionForOrchestrator("gemini-cli", "gemini-3-flash");
+    const protocolError = protocolSession?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+    expect(protocolError?.isError).toBe(true);
+    expect(protocolError?.text).toContain("ACP protocol error");
+  });
+
+  it("handles empty terminal text from gemini ACP without forcing an error", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    useOnlyPath(binDir);
+    process.env.FAKE_GEMINI_MODE = "empty";
+
+    const projectDir = makeTempDir("kodo-project");
+    const session = createSessionForOrchestrator("gemini-cli", "gemini-3-flash");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(false);
+    expect(result?.text).toBe("");
+    expect(result?.inputTokens).toBe(2);
+    expect(result?.outputTokens).toBe(1);
+  });
+
+  it("can target the opencode ACP profile while keeping the gemini-cli session interface", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeGemini(binDir);
+    installFakeOpencode(binDir);
+    useOnlyPath(binDir);
+    process.env.KODO_GEMINI_ACP_BACKEND = "opencode";
+
+    const projectDir = makeTempDir("kodo-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    const session = createSessionForOrchestrator("gemini-cli", "gemini-2.5-flash");
+    const result = session?.query("ship it", {
+      maxTurns: 1,
+      projectDir,
+    });
+
+    expect(result?.isError).toBe(false);
+    expect(result?.text).toContain("OpenCode completed");
+    expect(result?.inputTokens).toBe(4);
+    expect(result?.outputTokens).toBe(6);
+    expect(session?.sessionId).toBe("thread-9");
+
+    const opencodeRequests = readFileSync(path.join(projectDir, "opencode-acp-requests.jsonl"), "utf8");
+    expect(opencodeRequests).toContain('"method":"session.create"');
   });
 });
 

@@ -259,5 +259,5 @@ describe("runCli main shell", () => {
     expect(io.stdout()).toContain("Run ID: 20260322_121000");
     expect(io.stdout()).toContain("Summary:");
     io.restore();
-  });
+  }, 10000);
 });

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { SpawnSyncReturns } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import process from "node:process";
 
 import { emit as emitLogEvent, saveConversation } from "../logging/log.js";
@@ -72,6 +74,12 @@ type ParsedQueryOutput = {
   outputTokens?: number;
   rawMessages?: unknown[] | null;
   resultText: string;
+  sessionId?: string | null;
+  usageRaw?: JsonObject | null;
+};
+
+type HelperQueryOutput = SessionQueryResult & {
+  rawMessages?: unknown[] | null;
   sessionId?: string | null;
   usageRaw?: JsonObject | null;
 };
@@ -233,6 +241,73 @@ function spawnCommand(
     stdout: result.stdout ?? "",
     timedOut: isTimeoutError(result.error ?? null),
   };
+}
+
+function queryHelperPath(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "query-session-helper.mjs");
+}
+
+function runQueryHelper(payload: {
+  backend: SessionBackend;
+  maxTurns: number;
+  model: string;
+  projectDir: string;
+  prompt: string;
+  resumeSessionId: string | null;
+  systemPrompt?: string | null;
+  timeoutS?: number;
+}): HelperQueryOutput {
+  const startedAt = Date.now();
+  const helper = spawnSync(process.execPath, [queryHelperPath(), "/dev/stdin", "/dev/stdout"], {
+    encoding: "utf8",
+    env: buildWorkerEnv(),
+    input: `${JSON.stringify(payload)}\n`,
+    killSignal: "SIGKILL",
+    maxBuffer: MAX_BUFFER_BYTES,
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: (payload.timeoutS ?? DEFAULT_TIMEOUT_S) * 1000 + 5_000,
+  });
+
+  const elapsedS = Number(((Date.now() - startedAt) / 1000).toFixed(3));
+  if (isTimeoutError(helper.error ?? null)) {
+    return {
+      elapsedS,
+      inputTokens: null,
+      isError: true,
+      outputTokens: null,
+      text: `${payload.backend}: Process timed out after ${payload.timeoutS ?? DEFAULT_TIMEOUT_S}s. Hint: increase session_timeout_s in TeamConfig.`,
+      usageRaw: null,
+    };
+  }
+
+  const stdout = helper.stdout?.trim() ?? "";
+  if ((helper.status ?? 0) !== 0 || helper.signal !== null || helper.error !== undefined) {
+    return {
+      elapsedS,
+      inputTokens: null,
+      isError: true,
+      outputTokens: null,
+      text: helper.stderr.trim() || stdout || `${payload.backend}: session helper failed`,
+      usageRaw: null,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(stdout) as HelperQueryOutput;
+    return {
+      ...parsed,
+      elapsedS: parsed.elapsedS ?? elapsedS,
+    };
+  } catch {
+    return {
+      elapsedS,
+      inputTokens: null,
+      isError: true,
+      outputTokens: null,
+      text: helper.stderr.trim() || stdout || `${payload.backend}: session helper returned malformed JSON`,
+      usageRaw: null,
+    };
+  }
 }
 
 export function classifySessionError(
@@ -664,69 +739,101 @@ class SubprocessSession implements Session {
       project_dir: options.projectDir,
     });
 
-    const command = this.#definition.buildCommand({
-      maxTurns: options.maxTurns,
-      model: this.model,
-      projectDir: options.projectDir,
-      prompt: finalPrompt,
-      sessionId: this.#sessionId,
-    });
+    const helperResult =
+      this.backend === "gemini-cli"
+        ? runQueryHelper({
+            backend: this.backend,
+            maxTurns: options.maxTurns,
+            model: this.model,
+            projectDir: options.projectDir,
+            prompt,
+            resumeSessionId: this.#sessionId,
+            systemPrompt: this.#systemPromptSent ? null : this.#systemPrompt,
+            timeoutS: this.#timeoutS,
+          })
+        : (() => {
+            const command = this.#definition.buildCommand({
+              maxTurns: options.maxTurns,
+              model: this.model,
+              projectDir: options.projectDir,
+              prompt: finalPrompt,
+              sessionId: this.#sessionId,
+            });
 
-    const result = spawnCommand(command.command, command.args, {
-      cwd: this.backend === "codex" ? undefined : options.projectDir,
-      timeoutS: this.#timeoutS,
-    });
-    const parsed = this.#definition.parseOutput(result);
-    if (parsed.sessionId !== undefined && parsed.sessionId !== null) {
-      this.#sessionId = parsed.sessionId;
-    }
+            const result = spawnCommand(command.command, command.args, {
+              cwd: this.backend === "codex" ? undefined : options.projectDir,
+              timeoutS: this.#timeoutS,
+            });
+            const parsed = this.#definition.parseOutput(result);
+            let isError =
+              result.timedOut ||
+              result.error !== null ||
+              result.exitCode !== 0 ||
+              result.signal !== null ||
+              parsed.isError === true;
+            let text = parsed.resultText;
 
-    this.#stats.queries += 1;
-    this.#stats.totalInputTokens += parsed.inputTokens ?? 0;
-    this.#stats.totalOutputTokens += parsed.outputTokens ?? 0;
+            if (!isError && text.length === 0 && result.stderr.trim().length > 0) {
+              text = result.stderr.trim();
+            }
 
-    if (result.timedOut) {
+            if (isError && text.length === 0) {
+              text =
+                classifySessionError(result, this.backend, this.#timeoutS) ??
+                result.stderr.trim() ??
+                result.stdout.trim();
+            }
+
+            if (
+              !isError &&
+              this.backend === "codex" &&
+              text.length === 0 &&
+              result.stderr.trim().length > 0
+            ) {
+              isError = true;
+              text = classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
+            }
+
+            if (result.timedOut) {
+              emitLogEvent("session_timeout", {
+                session: this.backend,
+                timeout_s: this.#timeoutS,
+              });
+            }
+
+            return {
+              elapsedS: result.elapsedS,
+              inputTokens: parsed.inputTokens ?? null,
+              isError,
+              outputTokens: parsed.outputTokens ?? null,
+              rawMessages: parsed.rawMessages ?? null,
+              sessionId: parsed.sessionId ?? this.#sessionId,
+              text,
+              usageRaw: parsed.usageRaw ?? null,
+            } satisfies HelperQueryOutput;
+          })();
+
+    if (helperResult.text.includes("timed out")) {
       emitLogEvent("session_timeout", {
         session: this.backend,
         timeout_s: this.#timeoutS,
       });
     }
 
-    let isError =
-      result.timedOut ||
-      result.error !== null ||
-      result.exitCode !== 0 ||
-      result.signal !== null ||
-      parsed.isError === true;
-    let text = parsed.resultText;
-
-    if (!isError && text.length === 0 && result.stderr.trim().length > 0) {
-      text = result.stderr.trim();
+    if (helperResult.sessionId !== undefined && helperResult.sessionId !== null) {
+      this.#sessionId = helperResult.sessionId;
     }
 
-    if (isError && text.length === 0) {
-      text =
-        classifySessionError(result, this.backend, this.#timeoutS) ??
-        result.stderr.trim() ??
-        result.stdout.trim();
-    }
-
-    if (
-      !isError &&
-      this.backend === "codex" &&
-      text.length === 0 &&
-      result.stderr.trim().length > 0
-    ) {
-      isError = true;
-      text = classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
-    }
+    this.#stats.queries += 1;
+    this.#stats.totalInputTokens += helperResult.inputTokens ?? 0;
+    this.#stats.totalOutputTokens += helperResult.outputTokens ?? 0;
 
     const conversationLog =
-      Array.isArray(parsed.rawMessages) &&
-      parsed.rawMessages.length > 0 &&
+      Array.isArray(helperResult.rawMessages) &&
+      helperResult.rawMessages.length > 0 &&
       typeof options.agentName === "string" &&
       typeof options.queryIndex === "number"
-        ? saveConversation(options.agentName, options.queryIndex, parsed.rawMessages)
+        ? saveConversation(options.agentName, options.queryIndex, helperResult.rawMessages)
         : null;
 
     emitLogEvent("session_query_end", {
@@ -735,33 +842,33 @@ class SubprocessSession implements Session {
       cost_bucket: this.costBucket,
       session: this.backend,
       model: this.model,
-      elapsed_s: result.elapsedS,
-      is_error: isError,
+      elapsed_s: helperResult.elapsedS,
+      is_error: helperResult.isError,
       [this.#definition.sessionIdField]: this.#sessionId,
-      input_tokens: parsed.inputTokens,
-      output_tokens: parsed.outputTokens,
-      response_text: text || result.stderr.trim() || result.stdout.trim(),
-      returncode: result.exitCode,
-      signal: signalLabel(result.signal),
+      input_tokens: helperResult.inputTokens,
+      output_tokens: helperResult.outputTokens,
+      response_text: helperResult.text,
+      returncode: helperResult.isError ? 1 : 0,
+      signal: null,
     });
 
-    if (isError) {
+    if (helperResult.isError) {
       emitLogEvent("session_query_error", {
         session: this.backend,
         model: this.model,
-        error: text || result.stderr.trim() || result.stdout.trim(),
+        error: helperResult.text,
       });
     }
 
     return {
       conversationLog,
       costBucket: this.costBucket,
-      elapsedS: result.elapsedS,
-      inputTokens: parsed.inputTokens ?? null,
-      isError,
-      outputTokens: parsed.outputTokens ?? null,
-      text: text.trim(),
-      usageRaw: parsed.usageRaw ?? null,
+      elapsedS: helperResult.elapsedS,
+      inputTokens: helperResult.inputTokens ?? null,
+      isError: helperResult.isError,
+      outputTokens: helperResult.outputTokens ?? null,
+      text: helperResult.text.trim(),
+      usageRaw: helperResult.usageRaw ?? null,
     };
   }
 }

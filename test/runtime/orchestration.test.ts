@@ -275,24 +275,92 @@ console.log(JSON.stringify({ type: "result", result: "GOAL_DONE: cursor worker f
 function installFakeGemini(binDir: string): void {
   const script = `#!${process.execPath}
 const fs = require("node:fs");
-const path = require("node:path");
-
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
   console.log("gemini 1.0.0");
   process.exit(0);
 }
+if (args[0] === "acp") {
+  const { createInterface } = require("node:readline");
+  const rl = createInterface({ input: process.stdin });
+  const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+  let promptText = "";
 
-const promptIndex = args.indexOf("-p");
-const prompt = promptIndex === -1 ? "" : (args[promptIndex + 1] || "");
-
-if (prompt.includes("Verify the repository state honestly.")) {
-  console.log(JSON.stringify({ response: "ALL CHECKS PASS", stats: { models: { primary: { tokens: { prompt: 10, candidates: 4 } } } } }));
-  process.exit(0);
+  rl.on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({
+        id: message.id,
+        jsonrpc: "2.0",
+        result: {
+          capabilities: {
+            initialize: true,
+            prompt: true,
+            protocolVersion: "0.1",
+            resume: true,
+            serverName: "fake-gemini-acp",
+            sessionLifecycle: true,
+            serverVersion: "1.0.0",
+            streaming: true,
+            usage: true,
+          },
+        },
+      });
+      return;
+    }
+    if (message.method === "session.create") {
+      send({ id: message.id, jsonrpc: "2.0", result: { locator: { conversationId: "gemini-thread" } } });
+      return;
+    }
+    if (message.method === "session.resume") {
+      send({ id: message.id, jsonrpc: "2.0", result: { locator: message.params.locator } });
+      return;
+    }
+    if (message.method === "prompt") {
+      promptText = message.params?.prompt || "";
+      send({ id: message.id, jsonrpc: "2.0", result: { accepted: true } });
+      send({
+        jsonrpc: "2.0",
+        method: "session.created",
+        params: {
+          backend: "gemini",
+          locator: { conversationId: "gemini-thread" },
+          model: "gemini-3-flash",
+        },
+      });
+      if (promptText.includes("Verify the repository state honestly.")) {
+        send({
+          jsonrpc: "2.0",
+          method: "result",
+          params: {
+            locator: { conversationId: "gemini-thread" },
+            stopReason: "completed",
+            text: "ALL CHECKS PASS",
+            usage: { inputTokens: 10, outputTokens: 4 },
+          },
+        });
+        return;
+      }
+      fs.writeFileSync(process.cwd() + "/gemini-output.txt", "done\\n", "utf8");
+      send({
+        jsonrpc: "2.0",
+        method: "result",
+        params: {
+          locator: { conversationId: "gemini-thread" },
+          stopReason: "completed",
+          text: "GOAL_DONE: gemini worker finished",
+          usage: { inputTokens: 10, outputTokens: 4 },
+        },
+      });
+      return;
+    }
+    if (message.method === "shutdown") {
+      send({ id: message.id, jsonrpc: "2.0", result: {} });
+      process.exit(0);
+    }
+  });
+  return;
 }
-
-fs.writeFileSync(path.join(process.cwd(), "gemini-output.txt"), "done\\n", "utf8");
-console.log(JSON.stringify({ response: "GOAL_DONE: gemini worker finished", stats: { models: { primary: { tokens: { prompt: 10, candidates: 4 } } } } }));
 `;
   writeExecutable(path.join(binDir, "gemini"), script);
 }
@@ -527,7 +595,7 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"orchestrator_done_rejected"');
     expect(log).toContain('"event":"orchestrator_retry"');
     expect(log).toContain('"event":"orchestrator_done_accepted"');
-  }, 10000);
+  }, 15000);
 
   it("uses the accumulated summarizer output for end-cycle progress summaries", () => {
     const binDir = makeTempDir("kodo-bin");
