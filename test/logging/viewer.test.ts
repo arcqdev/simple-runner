@@ -76,6 +76,8 @@ describe("viewer", () => {
     expect(html).toContain("20260323_010203");
     expect(html).toContain("Investigate the auth regression");
     expect(html).toContain("project_name");
+    expect(html).toContain("conversation_count");
+    expect(html).toContain("total_agent_calls");
   });
 
   it("shows trace-upload affordances only when enabled", () => {

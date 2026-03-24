@@ -87,19 +87,15 @@ Track the user-visible functionality that still exists in `../kodo` but is missi
 
 ### 8. Logging And Run Accounting
 
-- Rich live run accounting is not ported.
-  - Missing per-agent call counts.
-  - Missing per-agent token accounting parity.
-  - Missing per-agent elapsed-time accounting parity.
-  - Missing per-agent error-count accounting parity.
-  - Missing orchestrator cost-bucket accounting parity.
-- TypeScript logging is functional, but the Python run-stats layer is not present.
+- Rich run accounting is present in TypeScript logs and parsed run state.
+  - Per-agent call, token, elapsed-time, and error accounting are captured.
+  - Orchestrator cost-bucket metadata is carried through logs and downstream parsing.
 
 ### 9. Conversation Capture
 
-- Conversation artifact capture is missing.
-  - Archives can include `conversations/` if such files exist.
-  - The TypeScript runtime does not currently persist those per-agent conversation artifacts the way Python does.
+- Conversation artifacts are persisted under each run directory in `conversations/`.
+  - Archives include those artifacts as part of the normal run payload.
+  - Viewer and run parsing can surface the captured conversation paths.
 
 ### 10. Trace Upload
 

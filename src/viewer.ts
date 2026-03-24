@@ -33,17 +33,23 @@ type ViewerServer = {
 };
 
 type ViewerIndexRun = {
+  conversation_count: number;
   completed_cycles: number;
+  error_count: number;
   finished: boolean;
   goal: string;
+  input_tokens: number;
   is_debug: boolean;
   log_file: string;
   max_cycles: number;
   model: string;
+  orchestrator_cost_bucket: string;
   orchestrator: string;
+  output_tokens: number;
   project_dir: string;
   project_name: string;
   run_id: string;
+  total_agent_calls: number;
 };
 
 function cleanupStaleViewerFiles(now = Date.now()): void {
@@ -106,17 +112,23 @@ function loadRunLog(runId: string): string {
 
 function buildRunIndex(): ViewerIndexRun[] {
   return listRuns().map((run) => ({
+    conversation_count: run.conversationArtifacts.length,
     completed_cycles: run.completedCycles,
+    error_count: run.errorCount,
     finished: run.finished,
     goal: run.goal.slice(0, 200),
+    input_tokens: run.inputTokens,
     is_debug: run.isDebug,
     log_file: run.logFile,
     max_cycles: run.maxCycles,
     model: run.model,
+    orchestrator_cost_bucket: run.orchestratorCostBucket,
     orchestrator: run.orchestrator,
+    output_tokens: run.outputTokens,
     project_dir: run.projectDir,
     project_name: path.basename(run.projectDir) || "?",
     run_id: run.runId,
+    total_agent_calls: run.totalAgentCalls,
   }));
 }
 
@@ -529,6 +541,7 @@ function buildHtml(logPath: string | null): string {
           '<p class="goal">' + escapeHtml((run.goal || "").trim() || "(no goal captured)") + '</p>' +
           '<div class="kv">' +
             '<div>' + escapeHtml(run.project_name) + ' • ' + escapeHtml(run.orchestrator) + ' • ' + escapeHtml(run.model) + '</div>' +
+            '<div>' + escapeHtml(String(run.total_agent_calls)) + ' agent calls • in ' + escapeHtml(String(run.input_tokens)) + ' • out ' + escapeHtml(String(run.output_tokens)) + ' • errors ' + escapeHtml(String(run.error_count)) + ' • conversations ' + escapeHtml(String(run.conversation_count)) + '</div>' +
             '<div>' + escapeHtml(run.log_file) + (run.is_debug ? ' • debug' : '') + '</div>' +
           '</div>';
         card.addEventListener("click", () => {
@@ -545,6 +558,11 @@ function buildHtml(logPath: string | null): string {
       const completedCycles = events.filter((record) => record.event === "cycle_end").length;
       const completedStages = events.filter((record) => record.event === "stage_end" && record.finished).length;
       const toolCalls = events.filter((record) => record.event === "orchestrator_tool_call").length;
+      const agentRuns = events.filter((record) => record.event === "agent_run_end");
+      const inputTokens = agentRuns.reduce((sum, record) => sum + (typeof record.input_tokens === "number" ? record.input_tokens : 0), 0);
+      const outputTokens = agentRuns.reduce((sum, record) => sum + (typeof record.output_tokens === "number" ? record.output_tokens : 0), 0);
+      const errorCount = agentRuns.filter((record) => record.is_error === true).length;
+      const conversationCount = agentRuns.filter((record) => typeof record.conversation_log === "string").length;
       const goal = String(start.goal ?? args.goal_text ?? "").trim() || "(no goal captured)";
 
       summaryGridEl.innerHTML = "";
@@ -553,6 +571,8 @@ function buildHtml(logPath: string | null): string {
         ["Project", String(start.project_dir ?? args.project_dir ?? EMBEDDED_CWD)],
         ["Orchestrator", String(start.orchestrator ?? args.orchestrator ?? "unknown") + " • " + String(start.model ?? args.orchestrator_model ?? "unknown")],
         ["Run Stats", completedCycles + " cycles • " + completedStages + " stages • " + toolCalls + " tool calls"],
+        ["Accounting", agentRuns.length + " agent calls • in " + inputTokens + " • out " + outputTokens + " • errors " + errorCount],
+        ["Artifacts", conversationCount + " conversation capture(s) • bucket " + String(start.cost_bucket ?? "unknown")],
         ["Status", runEnd.finished ? "completed" : (events.length > 0 ? "in progress / partial" : "empty log")],
         ["Summary", String(runEnd.summary ?? events.findLast((record) => record.event === "cycle_end")?.summary ?? "No summary captured")],
       ];

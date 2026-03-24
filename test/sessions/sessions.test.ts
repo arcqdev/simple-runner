@@ -1,6 +1,7 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -153,8 +154,10 @@ describe("session adapters", () => {
     expect(session).not.toBeNull();
 
     const first = session?.query("ship it", {
+      agentName: "worker_fast",
       maxTurns: 3,
       projectDir,
+      queryIndex: 1,
     });
     expect(first?.isError).toBe(false);
     expect(first?.text).toContain("Completed task");
@@ -163,11 +166,20 @@ describe("session adapters", () => {
     expect(session?.sessionId).toBe("thread-1");
 
     const second = session?.query("continue", {
+      agentName: "worker_fast",
       maxTurns: 3,
       projectDir,
+      queryIndex: 2,
     });
     expect(second?.isError).toBe(false);
     expect(second?.text).toContain("Resumed thread-1");
+    expect(first?.conversationLog).toBe("conversations/worker_fast_001.jsonl.gz");
+    expect(second?.conversationLog).toBe("conversations/worker_fast_002.jsonl.gz");
+    const conversationFile = path.join(runDir.root, first?.conversationLog ?? "");
+    expect(existsSync(conversationFile)).toBe(true);
+    expect(gunzipSync(readFileSync(conversationFile)).toString("utf8")).toContain(
+      '"type":"thread.started"',
+    );
 
     session?.reset();
     expect(session?.sessionId).toBeNull();
@@ -177,6 +189,8 @@ describe("session adapters", () => {
     expect(log).toContain('"event":"session_query_end"');
     expect(log).toContain('"event":"session_reset"');
     expect(log).toContain('"session_id":"thread-1"');
+    expect(log).toContain('"conversation_log":"conversations/worker_fast_001.jsonl.gz"');
+    expect(log).toContain('"cost_bucket":"codex_subscription"');
   }, 10000);
 
   it("classifies timeouts and logs session_timeout", () => {

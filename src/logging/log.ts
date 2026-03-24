@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 
 import { stringifyJson, toJsonObject } from "../runtime/json.js";
 import { parseRun } from "./runs.js";
@@ -15,6 +16,7 @@ export class RunDir {
   readonly goalPlanFile: string;
   readonly configFile: string;
   readonly teamFile: string;
+  readonly conversationsDir: string;
 
   private constructor(projectDir: string, runId: string, root: string) {
     this.projectDir = projectDir;
@@ -26,6 +28,7 @@ export class RunDir {
     this.goalPlanFile = path.join(root, "goal-plan.json");
     this.configFile = path.join(root, "config.json");
     this.teamFile = path.join(root, "team.json");
+    this.conversationsDir = path.join(root, "conversations");
   }
 
   static create(projectDir: string, runId = timestampRunId()): RunDir {
@@ -101,6 +104,32 @@ export function initAppend(logFile: string): string {
 
 export function emit(event: string, fields: Record<string, unknown> = {}): void {
   appendEvent(event, fields);
+}
+
+function sanitizeConversationLabel(value: string): string {
+  return value.replaceAll(/[^A-Za-z0-9._-]+/gu, "_").replaceAll(/^_+|_+$/gu, "") || "agent";
+}
+
+export function saveConversation(
+  agentName: string,
+  queryIndex: number,
+  messages: unknown[],
+): string | null {
+  if (activeLogFile === null || messages.length === 0) {
+    return null;
+  }
+
+  try {
+    const runRoot = path.dirname(activeLogFile);
+    const conversationsDir = path.join(runRoot, "conversations");
+    mkdirSync(conversationsDir, { recursive: true });
+    const fileName = `${sanitizeConversationLabel(agentName)}_${String(queryIndex).padStart(3, "0")}.jsonl.gz`;
+    const payload = messages.map((message) => stringifyJson(message)).join("\n");
+    writeFileSync(path.join(conversationsDir, fileName), gzipSync(Buffer.from(payload, "utf8")));
+    return `conversations/${fileName}`;
+  } catch {
+    return null;
+  }
 }
 
 export function getLogFile(): string {

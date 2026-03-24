@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { emit, getLogFile, init, initAppend, RunDir } from "../../src/logging/log.js";
+import { emit, getLogFile, init, initAppend, RunDir, saveConversation } from "../../src/logging/log.js";
 import { parseRun } from "../../src/logging/runs.js";
 
 function makeTempDir(): string {
@@ -56,6 +57,22 @@ describe("logging primitives", () => {
     expect(record.event).toBe("edge");
     expect(String(record.callback)).toContain("value");
     expect(record.filePath).toBe(path.join(tempDir, "x"));
+  });
+
+  it("persists conversation artifacts into the active run directory", () => {
+    const tempDir = makeTempDir();
+    const runDir = RunDir.create(tempDir, "conversation_test");
+    init(runDir);
+
+    const relativePath = saveConversation("worker_fast", 1, [
+      { type: "thread.started", thread_id: "thread-1" },
+      { type: "agent_message", message: "GOAL_DONE: completed" },
+    ]);
+
+    expect(relativePath).toBe("conversations/worker_fast_001.jsonl.gz");
+    const fullPath = path.join(runDir.root, relativePath ?? "");
+    expect(existsSync(fullPath)).toBe(true);
+    expect(gunzipSync(readFileSync(fullPath)).toString("utf8")).toContain('"thread_id":"thread-1"');
   });
 
   it("appends run_resumed when resuming a valid log", () => {
@@ -217,10 +234,35 @@ describe("parseRun", () => {
       { event: "cycle_end", summary: "stage 1 done" },
       { event: "stage_end", stage_index: 1, finished: true, summary: "s1 summary" },
       { event: "stage_start", stage_index: 2 },
-      { event: "session_query_end", session: "claude", session_id: "ses-abc" },
-      { event: "agent_run_end", agent: "worker_smart" },
-      { event: "session_query_end", session: "cursor", chat_id: "chat-xyz" },
-      { event: "agent_run_end", agent: "worker_fast" },
+      {
+        event: "session_query_end",
+        session: "claude",
+        session_id: "ses-abc",
+        conversation_log: "conversations/worker_smart_001.jsonl.gz",
+      },
+      {
+        event: "agent_run_end",
+        agent: "worker_smart",
+        cost_bucket: "claude_subscription",
+        elapsed_s: 1.25,
+        input_tokens: 21,
+        output_tokens: 13,
+      },
+      {
+        event: "session_query_end",
+        session: "cursor",
+        chat_id: "chat-xyz",
+        conversation_log: "conversations/worker_fast_001.jsonl.gz",
+      },
+      {
+        event: "agent_run_end",
+        agent: "worker_fast",
+        cost_bucket: "cursor_subscription",
+        elapsed_s: 0.75,
+        input_tokens: 8,
+        is_error: true,
+        output_tokens: 5,
+      },
       { event: "cycle_end" },
       { event: "stage_end", stage_index: 2, finished: false, summary: "should not count" },
     ]);
@@ -236,6 +278,33 @@ describe("parseRun", () => {
       worker_fast: "chat-xyz",
       worker_smart: "ses-abc",
     });
+    expect(state?.agentStats.worker_smart).toEqual({
+      calls: 1,
+      conversationLogs: ["conversations/worker_smart_001.jsonl.gz"],
+      costBucket: "claude_subscription",
+      elapsedS: 1.25,
+      errors: 0,
+      inputTokens: 21,
+      outputTokens: 13,
+    });
+    expect(state?.agentStats.worker_fast).toEqual({
+      calls: 1,
+      conversationLogs: ["conversations/worker_fast_001.jsonl.gz"],
+      costBucket: "cursor_subscription",
+      elapsedS: 0.75,
+      errors: 1,
+      inputTokens: 8,
+      outputTokens: 5,
+    });
+    expect(state?.conversationArtifacts).toEqual([
+      "conversations/worker_smart_001.jsonl.gz",
+      "conversations/worker_fast_001.jsonl.gz",
+    ]);
+    expect(state?.inputTokens).toBe(29);
+    expect(state?.outputTokens).toBe(18);
+    expect(state?.errorCount).toBe(1);
+    expect(state?.totalAgentCalls).toBe(2);
+    expect(state?.totalElapsedS).toBe(2);
     expect(state?.teamPreset).toBe("quick");
   });
 

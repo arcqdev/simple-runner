@@ -44,6 +44,7 @@ type VerificationGroups = {
 
 type RuntimeState = {
   agentSessionIds: Record<string, string>;
+  agentStats: Record<string, AgentRunStats>;
   completedCycles: number;
   completedStages: number[];
   currentStageCycles: number;
@@ -52,6 +53,16 @@ type RuntimeState = {
   parallelStageState: Record<string, PendingExchangeState>;
   pendingExchanges: PendingExchangeState[];
   stageSummaries: string[];
+};
+
+type AgentRunStats = {
+  calls: number;
+  conversationLogs: string[];
+  costBucket: string;
+  elapsedS: number;
+  errors: number;
+  inputTokens: number;
+  outputTokens: number;
 };
 
 type PendingExchangeState = {
@@ -233,6 +244,23 @@ function fallbackWorkerBackend(orchestrator: string): TeamAgentConfig["backend"]
   }
 }
 
+function orchestratorCostBucket(orchestrator: string): string {
+  switch (orchestrator) {
+    case "api":
+      return "api";
+    case "claude-code":
+      return "claude_subscription";
+    case "codex":
+      return "codex_subscription";
+    case "cursor":
+      return "cursor_subscription";
+    case "gemini-cli":
+      return "gemini_api";
+    default:
+      return "unknown";
+  }
+}
+
 function runtimeStatePath(runDir: RunDir): string {
   return path.join(runDir.root, "runtime-state.json");
 }
@@ -240,6 +268,7 @@ function runtimeStatePath(runDir: RunDir): string {
 function defaultState(): RuntimeState {
   return {
     agentSessionIds: {},
+    agentStats: {},
     completedCycles: 0,
     completedStages: [],
     currentStageCycles: 0,
@@ -260,6 +289,10 @@ function loadRuntimeState(runDir: RunDir): RuntimeState {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Partial<RuntimeState>;
     return {
       agentSessionIds: parsed.agentSessionIds ?? {},
+      agentStats:
+        typeof parsed.agentStats === "object" && parsed.agentStats !== null && !Array.isArray(parsed.agentStats)
+          ? (parsed.agentStats as Record<string, AgentRunStats>)
+          : {},
       completedCycles: parsed.completedCycles ?? 0,
       completedStages: parsed.completedStages ?? [],
       currentStageCycles: parsed.currentStageCycles ?? 0,
@@ -282,6 +315,39 @@ function loadRuntimeState(runDir: RunDir): RuntimeState {
   } catch {
     return defaultState();
   }
+}
+
+function emptyAgentRunStats(costBucket = ""): AgentRunStats {
+  return {
+    calls: 0,
+    conversationLogs: [],
+    costBucket,
+    elapsedS: 0,
+    errors: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+}
+
+function updateAgentStats(
+  state: RuntimeState,
+  agentName: string,
+  response: SessionQueryResult,
+  session: Session,
+): void {
+  const stats = state.agentStats[agentName] ?? emptyAgentRunStats(session.costBucket);
+  stats.calls += 1;
+  stats.elapsedS += response.elapsedS;
+  stats.errors += response.isError ? 1 : 0;
+  stats.inputTokens += response.inputTokens ?? 0;
+  stats.outputTokens += response.outputTokens ?? 0;
+  if (response.conversationLog) {
+    stats.conversationLogs.push(response.conversationLog);
+  }
+  if (session.costBucket.length > 0) {
+    stats.costBucket = session.costBucket;
+  }
+  state.agentStats[agentName] = stats;
 }
 
 function persistRuntimeState(runDir: RunDir, state: RuntimeState): void {
@@ -1059,8 +1125,10 @@ function runVerification(
       agent.session.reset();
     }
     const response = agent.session.query(prompt, {
+      agentName: agent.name,
       maxTurns: agent.config.max_turns ?? 8,
       projectDir,
+      queryIndex: agent.session.stats.queries + 1,
     });
     emitLogEvent("done_verification", {
       agent: agent.name,
@@ -1068,6 +1136,16 @@ function runVerification(
     });
     emitLogEvent("agent_run_end", {
       agent: agent.name,
+      conversation_log: response.conversationLog,
+      cost_bucket: agent.session.costBucket,
+      elapsed_s: response.elapsedS,
+      input_tokens: response.inputTokens,
+      is_error: response.isError,
+      output_tokens: response.outputTokens,
+      response_text: response.text,
+      session_queries: agent.session.stats.queries,
+      session_tokens:
+        agent.session.stats.totalInputTokens + agent.session.stats.totalOutputTokens,
       status: response.isError ? "failed" : "completed",
     });
     if (response.isError || !verificationPassed(response.text)) {
@@ -1081,8 +1159,10 @@ function runVerification(
       const verifier = fallback.session.clone();
       try {
         const response = verifier.query(prompt, {
+          agentName: fallback.name,
           maxTurns: fallback.config.max_turns ?? 8,
           projectDir,
+          queryIndex: verifier.stats.queries + 1,
         });
         emitLogEvent("done_verification", {
           agent: fallback.name,
@@ -1090,6 +1170,15 @@ function runVerification(
         });
         emitLogEvent("agent_run_end", {
           agent: fallback.name,
+          conversation_log: response.conversationLog,
+          cost_bucket: verifier.costBucket,
+          elapsed_s: response.elapsedS,
+          input_tokens: response.inputTokens,
+          is_error: response.isError,
+          output_tokens: response.outputTokens,
+          response_text: response.text,
+          session_queries: verifier.stats.queries,
+          session_tokens: verifier.stats.totalInputTokens + verifier.stats.totalOutputTokens,
           status: response.isError ? "failed" : "completed",
         });
         if (response.isError || !verificationPassed(response.text)) {
@@ -1269,6 +1358,7 @@ abstract class RuntimeOrchestratorBase {
     const plan = loadGoalPlan(runDir);
 
     emitLogEvent("run_start", {
+      cost_bucket: orchestratorCostBucket(this.kind),
       goal: goal.goalText,
       has_stages: plan !== null,
       max_cycles: params.maxCycles,
@@ -1294,6 +1384,7 @@ abstract class RuntimeOrchestratorBase {
         : this.runPlan(runDir, params, goal, flags, state, plan);
 
     emitLogEvent("run_end", {
+      cost_bucket: orchestratorCostBucket(this.kind),
       finished: result.finished,
       orchestrator: this.kind,
       summary: result.summary,
@@ -1590,8 +1681,20 @@ abstract class RuntimeOrchestratorBase {
 
           emitLogEvent("agent_run_end", {
             agent: stageRuntime.worker.name,
+            conversation_log: queryResult.conversationLog,
+            cost_bucket: stageRuntime.worker.session.costBucket,
+            elapsed_s: queryResult.elapsedS,
+            input_tokens: queryResult.inputTokens,
+            is_error: queryResult.isError,
+            output_tokens: queryResult.outputTokens,
+            response_text: queryResult.text,
+            session_queries: stageRuntime.worker.session.stats.queries,
+            session_tokens:
+              stageRuntime.worker.session.stats.totalInputTokens +
+              stageRuntime.worker.session.stats.totalOutputTokens,
             status: queryResult.isError ? "failed" : "completed",
           });
+          updateAgentStats(state, stageRuntime.worker.name, queryResult, stageRuntime.worker.session);
 
           if (outcome.directive.terminal === "goal_done" && !queryResult.isError) {
             const verificationIssues = runVerification(
@@ -1654,6 +1757,7 @@ abstract class RuntimeOrchestratorBase {
         persistRuntimeState(runDir, state);
         emitLogEvent("cycle_end", {
           cycle_index: state.completedCycles,
+          cost_bucket: orchestratorCostBucket(this.kind),
           exchanges: activeStages.length,
           finished: stageRuntimes.every((stage) => stage.finished),
           summary: combinedSummary,
@@ -1948,6 +2052,7 @@ abstract class RuntimeOrchestratorBase {
 
         emitLogEvent("cycle_end", {
           cycle_index: cycleIndex,
+          cost_bucket: orchestratorCostBucket(this.kind),
           exchanges: 1,
           finished,
           summary,
@@ -2045,8 +2150,19 @@ abstract class RuntimeOrchestratorBase {
     });
     emitLogEvent("agent_run_end", {
       agent: worker.name,
+      conversation_log: outcome.response.conversationLog,
+      cost_bucket: worker.session.costBucket,
+      elapsed_s: outcome.response.elapsedS,
+      input_tokens: outcome.response.inputTokens,
+      is_error: outcome.response.isError,
+      output_tokens: outcome.response.outputTokens,
+      response_text: outcome.response.text,
+      session_queries: worker.session.stats.queries,
+      session_tokens:
+        worker.session.stats.totalInputTokens + worker.session.stats.totalOutputTokens,
       status: outcome.response.isError ? "failed" : "completed",
     });
+    updateAgentStats(state, worker.name, outcome.response, worker.session);
 
     const sessionId = worker.session.sessionId;
     if (sessionId !== null) {
@@ -2063,8 +2179,10 @@ abstract class RuntimeOrchestratorBase {
     maxExchanges: number,
   ): WorkerCycleOutcome {
     const response = worker.session.query(prompt, {
+      agentName: worker.name,
       maxTurns: worker.config.max_turns ?? maxExchanges,
       projectDir,
+      queryIndex: worker.session.stats.queries + 1,
     });
     return this.buildOutcome(response);
   }
@@ -2104,8 +2222,10 @@ export class ClaudeCodeRuntimeOrchestrator extends RuntimeOrchestratorBase {
     maxExchanges: number,
   ): WorkerCycleOutcome {
     let response = worker.session.query(prompt, {
+      agentName: worker.name,
       maxTurns: worker.config.max_turns ?? maxExchanges,
       projectDir,
+      queryIndex: worker.session.stats.queries + 1,
     });
     let outcome = this.buildOutcome(response);
 
@@ -2121,8 +2241,10 @@ export class ClaudeCodeRuntimeOrchestrator extends RuntimeOrchestratorBase {
       response = worker.session.query(
         "You must signal completion to end this cycle. Reply with exactly one of GOAL_DONE:, END_CYCLE:, or RAISE_ISSUE: followed by a short summary.",
         {
+          agentName: worker.name,
           maxTurns: worker.config.max_turns ?? maxExchanges,
           projectDir,
+          queryIndex: worker.session.stats.queries + 1,
         },
       );
       outcome = this.buildOutcome(response);

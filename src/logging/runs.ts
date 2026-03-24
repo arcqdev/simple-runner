@@ -5,20 +5,26 @@ import path from "node:path";
 import { safeJoin } from "../runtime/fs.js";
 
 export type RunState = {
+  agentStats: Record<string, AgentStats>;
   agentSessionIds: Record<string, string>;
   completedCycles: number;
   completedStages: number[];
+  conversationArtifacts: string[];
   currentStageCycles: number;
+  errorCount: number;
   finished: boolean;
   goal: string;
   hasStages: boolean;
+  inputTokens: number;
   isDebug: boolean;
   lastSummary: string;
   logFile: string;
   maxExchanges: number;
   maxCycles: number;
   model: string;
+  orchestratorCostBucket: string;
   orchestrator: string;
+  outputTokens: number;
   pendingExchanges: Array<Record<string, unknown>>;
   parallelStageState: Record<string, Record<string, unknown>>;
   projectDir: string;
@@ -26,9 +32,20 @@ export type RunState = {
   stageSummaries: string[];
   team: string[];
   teamPreset: string;
+  totalAgentCalls: number;
+  totalElapsedS: number;
 };
 
 type RunEvent = Record<string, unknown>;
+type AgentStats = {
+  calls: number;
+  conversationLogs: string[];
+  costBucket: string;
+  elapsedS: number;
+  errors: number;
+  inputTokens: number;
+  outputTokens: number;
+};
 
 export function runsRoot(homeDir = os.homedir()): string {
   const override = process.env.KODO_RUNS_DIR;
@@ -71,6 +88,48 @@ function numberField(event: RunEvent | null, key: string): number | null {
   return typeof value === "number" ? value : null;
 }
 
+function emptyAgentStats(costBucket = ""): AgentStats {
+  return {
+    calls: 0,
+    conversationLogs: [],
+    costBucket,
+    elapsedS: 0,
+    errors: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function inferCostBucketFromName(name: string): string {
+  const normalized = name.toLowerCase();
+  if (normalized === "api") {
+    return "api";
+  }
+  if (normalized.includes("claude")) {
+    return "claude_subscription";
+  }
+  if (normalized.includes("codex")) {
+    return "codex_subscription";
+  }
+  if (normalized.includes("cursor") || normalized.includes("browser") || normalized.includes("tester")) {
+    return "cursor_subscription";
+  }
+  if (normalized.includes("gemini")) {
+    return "gemini_api";
+  }
+  if (normalized.includes("smart") || normalized.includes("architect")) {
+    return "claude_subscription";
+  }
+  if (normalized.includes("fast")) {
+    return "cursor_subscription";
+  }
+  return "unknown";
+}
+
 export function parseRun(logFile: string): RunState | null {
   const events = readJsonLines(logFile);
   let runStart: RunEvent | null = null;
@@ -89,13 +148,20 @@ export function parseRun(logFile: string): RunState | null {
   let parallelStageState: Record<string, Record<string, unknown>> = {};
   const sessionIdsByName: Record<string, string> = {};
   const stageSummaries: string[] = [];
+  const agentStats: Record<string, AgentStats> = {};
+  const conversationArtifacts = new Set<string>();
   const genericSessionNames = new Set(["claude", "codex", "cursor", "gemini-cli"]);
+  let pendingConversationLog: string | null = null;
+  let orchestratorCostBucket = "unknown";
 
   for (const event of events) {
     switch (event.event) {
       case "run_start":
         runStart = event;
         hasStages = event.has_stages === true;
+        orchestratorCostBucket =
+          stringField(event, "cost_bucket") ??
+          inferCostBucketFromName(stringField(event, "orchestrator") ?? "unknown");
         break;
       case "cli_args":
         cliArgs = event;
@@ -110,6 +176,7 @@ export function parseRun(logFile: string): RunState | null {
         if (currentStageIndex !== null) {
           currentStageCycles += 1;
         }
+        orchestratorCostBucket = stringField(event, "cost_bucket") ?? orchestratorCostBucket;
         break;
       case "stage_end":
         if (event.finished === true && typeof event.stage_index === "number") {
@@ -129,6 +196,7 @@ export function parseRun(logFile: string): RunState | null {
         break;
       case "session_query_end":
         pendingSessionId = stringField(event, "session_id") ?? stringField(event, "chat_id");
+        pendingConversationLog = stringField(event, "conversation_log");
         {
           const sessionName = stringField(event, "session");
           if (sessionName !== null && pendingSessionId !== null) {
@@ -150,8 +218,31 @@ export function parseRun(logFile: string): RunState | null {
               delete agentSessionIds[sessionName];
             }
           }
+          const bucket =
+            stringField(event, "cost_bucket") ?? inferCostBucketFromName(String(event.agent));
+          const stats = agentStats[event.agent] ?? emptyAgentStats(bucket);
+          stats.calls += 1;
+          stats.elapsedS += numberField(event, "elapsed_s") ?? 0;
+          stats.errors += event.is_error === true ? 1 : 0;
+          stats.inputTokens += numberField(event, "input_tokens") ?? 0;
+          stats.outputTokens += numberField(event, "output_tokens") ?? 0;
+          if (bucket.length > 0) {
+            stats.costBucket = bucket;
+          }
+          const conversationLog =
+            stringField(event, "conversation_log") ?? pendingConversationLog;
+          if (conversationLog !== null) {
+            stats.conversationLogs.push(conversationLog);
+            conversationArtifacts.add(conversationLog);
+          }
+          agentStats[event.agent] = stats;
         }
         pendingSessionId = null;
+        pendingConversationLog = null;
+        break;
+      case "orchestrator_response":
+        orchestratorCostBucket =
+          stringField(event, "cost_bucket") ?? orchestratorCostBucket;
         break;
       default:
         break;
@@ -183,6 +274,36 @@ export function parseRun(logFile: string): RunState | null {
           ),
         );
       }
+      if (
+        typeof parsed.agentStats === "object" &&
+        parsed.agentStats !== null &&
+        !Array.isArray(parsed.agentStats)
+      ) {
+        for (const [agentName, raw] of Object.entries(parsed.agentStats)) {
+          if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+            continue;
+          }
+          const stats = raw as Record<string, unknown>;
+          const merged = agentStats[agentName] ?? emptyAgentStats();
+          merged.calls = typeof stats.calls === "number" ? stats.calls : merged.calls;
+          merged.elapsedS = typeof stats.elapsedS === "number" ? stats.elapsedS : merged.elapsedS;
+          merged.errors = typeof stats.errors === "number" ? stats.errors : merged.errors;
+          merged.inputTokens =
+            typeof stats.inputTokens === "number" ? stats.inputTokens : merged.inputTokens;
+          merged.outputTokens =
+            typeof stats.outputTokens === "number" ? stats.outputTokens : merged.outputTokens;
+          if (typeof stats.costBucket === "string") {
+            merged.costBucket = stats.costBucket;
+          }
+          for (const conversationLog of stringList(stats.conversationLogs)) {
+            if (!merged.conversationLogs.includes(conversationLog)) {
+              merged.conversationLogs.push(conversationLog);
+            }
+            conversationArtifacts.add(conversationLog);
+          }
+          agentStats[agentName] = merged;
+        }
+      }
     }
   } catch {
     pendingExchanges = [];
@@ -199,14 +320,30 @@ export function parseRun(logFile: string): RunState | null {
     return null;
   }
 
+  const aggregated = Object.values(agentStats).reduce(
+    (accumulator, stats) => {
+      accumulator.calls += stats.calls;
+      accumulator.elapsedS += stats.elapsedS;
+      accumulator.errors += stats.errors;
+      accumulator.inputTokens += stats.inputTokens;
+      accumulator.outputTokens += stats.outputTokens;
+      return accumulator;
+    },
+    { calls: 0, elapsedS: 0, errors: 0, inputTokens: 0, outputTokens: 0 },
+  );
+
   return {
+    agentStats,
     agentSessionIds,
     completedCycles,
     completedStages,
+    conversationArtifacts: [...conversationArtifacts],
     currentStageCycles,
+    errorCount: aggregated.errors,
     finished,
     goal,
     hasStages,
+    inputTokens: aggregated.inputTokens,
     isDebug,
     lastSummary,
     logFile,
@@ -215,8 +352,10 @@ export function parseRun(logFile: string): RunState | null {
       numberField(runStart, "max_exchanges") ?? numberField(cliArgs, "max_exchanges") ?? 0,
     model:
       stringField(runStart, "model") ?? stringField(cliArgs, "orchestrator_model") ?? "unknown",
+    orchestratorCostBucket,
     orchestrator:
       stringField(runStart, "orchestrator") ?? stringField(cliArgs, "orchestrator") ?? "unknown",
+    outputTokens: aggregated.outputTokens,
     pendingExchanges,
     parallelStageState,
     projectDir: stringField(runStart, "project_dir") ?? stringField(cliArgs, "project_dir") ?? "",
@@ -226,6 +365,8 @@ export function parseRun(logFile: string): RunState | null {
       ? runStart.team.filter((value): value is string => typeof value === "string")
       : [],
     teamPreset: stringField(cliArgs, "team") ?? stringField(cliArgs, "mode") ?? "full",
+    totalAgentCalls: aggregated.calls,
+    totalElapsedS: Number(aggregated.elapsedS.toFixed(3)),
   };
 }
 

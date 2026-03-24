@@ -48,6 +48,16 @@ export function writeRunFixture(homeDir: string, options: RunFixtureOptions): st
   ];
 
   for (let index = 0; index < (options.completedCycles ?? 0); index += 1) {
+    events.push({
+      agent: "worker_fast",
+      conversation_log: `conversations/worker_fast_${String(index + 1).padStart(3, "0")}.jsonl.gz`,
+      cost_bucket: "cursor_subscription",
+      elapsed_s: 0.5,
+      event: "agent_run_end",
+      input_tokens: 5,
+      output_tokens: 3,
+      status: "completed",
+    });
     events.push({ event: "cycle_end", summary: `Cycle ${index + 1} complete` });
   }
 

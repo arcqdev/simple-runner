@@ -226,6 +226,17 @@ describe("listRuns", () => {
       { event: "cycle_end", summary: "cycle one" },
     ]);
     writeRuntimeState(homeDir, "resume_rich", {
+      agentStats: {
+        worker_fast: {
+          calls: 2,
+          conversationLogs: ["conversations/worker_fast_001.jsonl.gz"],
+          costBucket: "cursor_subscription",
+          elapsedS: 1.5,
+          errors: 0,
+          inputTokens: 12,
+          outputTokens: 7,
+        },
+      },
       pendingExchanges: [{ agentName: "worker_fast", scope: "single" }],
       parallelStageState: {
         "2": { agentName: "worker_fast", stageIndex: 2, sessionId: "saved-thread" },
@@ -235,5 +246,10 @@ describe("listRuns", () => {
     const run = listRuns(project)[0];
     expect(run?.pendingExchanges).toHaveLength(1);
     expect(run?.parallelStageState["2"]?.sessionId).toBe("saved-thread");
+    expect(run?.agentStats.worker_fast?.calls).toBe(2);
+    expect(run?.conversationArtifacts).toEqual(["conversations/worker_fast_001.jsonl.gz"]);
+    expect(run?.inputTokens).toBe(12);
+    expect(run?.outputTokens).toBe(7);
+    expect(run?.totalAgentCalls).toBe(2);
   });
 });

@@ -177,11 +177,19 @@ function syntheticExecutionResult(
     tool: "implement_goal",
   });
   emitLogEvent("session_query_end", {
+    cost_bucket: params.orchestrator === "api" ? "api" : "unknown",
+    conversation_log: null,
     session: params.orchestrator,
     session_id: `${runDir.runId}-orchestrator`,
   });
   emitLogEvent("agent_run_end", {
     agent: "orchestrator",
+    cost_bucket: params.orchestrator === "api" ? "api" : "unknown",
+    elapsed_s: 0,
+    input_tokens: 0,
+    is_error: false,
+    output_tokens: 0,
+    response_text: summary,
     status: "completed",
   });
   emitLogEvent("orchestrator_tool_result", {
@@ -196,6 +204,7 @@ function syntheticExecutionResult(
   });
   emitLogEvent("cycle_end", {
     cycle_index: 1,
+    cost_bucket: params.orchestrator === "api" ? "api" : "unknown",
     exchanges: 1,
     finished: true,
     summary,
@@ -209,6 +218,7 @@ function syntheticExecutionResult(
     run_dir: runDir.root,
   });
   emitLogEvent("run_end", {
+    cost_bucket: params.orchestrator === "api" ? "api" : "unknown",
     finished: true,
     orchestrator: params.orchestrator,
     summary,

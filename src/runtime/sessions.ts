@@ -2,13 +2,15 @@ import { spawnSync } from "node:child_process";
 import type { SpawnSyncReturns } from "node:child_process";
 import process from "node:process";
 
-import { emit as emitLogEvent } from "../logging/log.js";
+import { emit as emitLogEvent, saveConversation } from "../logging/log.js";
 import type { JsonObject } from "./json.js";
 
 export type SessionBackend = "claude-cli" | "codex" | "cursor" | "gemini-cli";
 export type TeamSessionBackend = "claude" | "claude-cli" | "codex" | "cursor" | "gemini-cli";
 
 export type SessionQueryResult = {
+  conversationLog?: string | null;
+  costBucket?: string;
   elapsedS: number;
   inputTokens?: number | null;
   isError: boolean;
@@ -25,8 +27,10 @@ export type SessionStats = {
 };
 
 export type SessionQueryOptions = {
+  agentName?: string;
   maxTurns: number;
   projectDir: string;
+  queryIndex?: number;
 };
 
 export type SessionOptions = {
@@ -648,6 +652,7 @@ class SubprocessSession implements Session {
     this.#systemPromptSent = true;
 
     emitLogEvent("session_query_start", {
+      agent: options.agentName,
       session: this.backend,
       model: this.model,
       prompt: finalPrompt,
@@ -712,7 +717,18 @@ class SubprocessSession implements Session {
       text = classifySessionError(result, this.backend, this.#timeoutS) ?? result.stderr.trim();
     }
 
+    const conversationLog =
+      Array.isArray(parsed.rawMessages) &&
+      parsed.rawMessages.length > 0 &&
+      typeof options.agentName === "string" &&
+      typeof options.queryIndex === "number"
+        ? saveConversation(options.agentName, options.queryIndex, parsed.rawMessages)
+        : null;
+
     emitLogEvent("session_query_end", {
+      agent: options.agentName,
+      conversation_log: conversationLog,
+      cost_bucket: this.costBucket,
       session: this.backend,
       model: this.model,
       elapsed_s: result.elapsedS,
@@ -734,6 +750,8 @@ class SubprocessSession implements Session {
     }
 
     return {
+      conversationLog,
+      costBucket: this.costBucket,
       elapsedS: result.elapsedS,
       inputTokens: parsed.inputTokens ?? null,
       isError,

@@ -1131,7 +1131,14 @@ describe("runtime orchestration", () => {
 
     expect(result.finished).toBe(true);
     expect(readFileSync(path.join(projectDir, "worker-output.txt"), "utf8")).toContain("attempt 1");
-    expect(readFileSync(runDir.logFile, "utf8")).toContain('"orchestrator":"api"');
+    const log = readFileSync(runDir.logFile, "utf8");
+    expect(log).toContain('"orchestrator":"api"');
+    expect(log).toContain('"event":"agent_run_end"');
+    expect(log).toContain('"cost_bucket":"codex_subscription"');
+    expect(log).toContain('"conversation_log":"conversations/worker_fast_001.jsonl.gz"');
+    expect(existsSync(path.join(runDir.root, "conversations", "worker_fast_001.jsonl.gz"))).toBe(
+      true,
+    );
   });
 
   it("nudges claude-code workers until they emit a done directive", () => {
