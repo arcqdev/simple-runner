@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-import { getTeamByName } from "../config/team-config.js";
+import { getTeamByName, loadTeamConfigFile } from "../config/team-config.js";
 import { initAppend, emit as emitLogEvent, RunDir } from "../logging/log.js";
 import { getRunById } from "../logging/runs.js";
 import type { MainFlags } from "../cli/types.js";
@@ -111,11 +111,18 @@ function buildRuntimeSummary(
   return buildGenericSummary(normalizedGoal, params);
 }
 
-function configuredBackends(params: ResolvedRuntimeParams, projectDir: string): string[] {
+function configuredBackends(
+  params: ResolvedRuntimeParams,
+  projectDir: string,
+  runTeamFile?: string,
+): string[] {
   const backends = new Set<string>();
-  const listing = getTeamByName(params.team, undefined, projectDir);
-  if (listing !== null) {
-    for (const agent of Object.values(listing.config.agents)) {
+  const teamConfig =
+    runTeamFile !== undefined && existsSync(runTeamFile)
+      ? loadTeamConfigFile(runTeamFile)
+      : getTeamByName(params.team, undefined, projectDir)?.config ?? null;
+  if (teamConfig !== null) {
+    for (const agent of Object.values(teamConfig.agents)) {
       backends.add(agent.backend);
     }
   }
@@ -226,7 +233,9 @@ export function executePendingRun(
   goal: ResolvedGoal,
   flags: MainFlags,
 ): ExecutionResult {
-  const backendWarnings = preflightWarningsForBackends(configuredBackends(params, flags.project));
+  const backendWarnings = preflightWarningsForBackends(
+    configuredBackends(params, flags.project, runDir.teamFile),
+  );
 
   emitLogEvent("preflight_start", {
     orchestrator: params.orchestrator,

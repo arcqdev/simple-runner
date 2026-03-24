@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/main.js";
 import { setPromptAdapter } from "../../src/cli/prompts.js";
+import * as models from "../../src/config/models.js";
 import { resetDotEnvForTests } from "../../src/config/dotenv.js";
 import { projectConfigPath } from "../../src/config/project-config.js";
 import { clearUserConfigCache } from "../../src/config/user-config.js";
@@ -186,6 +187,33 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Orchestrator: codex (gpt-5.4)");
     expect(io.stdout()).toContain("Auto-commit: disabled");
     expect(io.stdout()).toContain("Run completed.");
+    io.restore();
+  });
+
+  it("auto-recovers a built-in team when a different worker backend is available", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    for (const key of API_KEY_ENV_VARS) {
+      vi.stubEnv(key, "");
+    }
+    const binDir = path.join(homeDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(binDir, "codex"), "");
+    vi.stubEnv("PATH", binDir);
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
+    expect(io.stdout()).toContain("Recovered team 'full' by generating a runnable config");
+
+    const savedPath = path.join(homeDir, ".kodo", "teams", "full.json");
+    expect(JSON.parse(readFileSync(savedPath, "utf8"))).toMatchObject({
+      agents: {
+        worker_fast: {
+          backend: "codex",
+        },
+      },
+    });
     io.restore();
   });
 
@@ -494,6 +522,49 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(runCli(["--goal", "Ship the CLI", "--project", project])).toBe(0);
     expect(secondIo.stdout()).toContain("Using existing goal plan");
     secondIo.restore();
+  });
+
+  it("keeps JSON output on stdout and sends launch progress to stderr", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship the CLI", "--project", project, "--json"])).toBe(0);
+    expect(() => JSON.parse(io.stdout())).not.toThrow();
+    expect(io.stderr()).toContain("Running intake (non-interactive)");
+    io.restore();
+  });
+
+  it("offers detected Ollama models during interactive orchestrator selection", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    for (const key of API_KEY_ENV_VARS) {
+      vi.stubEnv(key, "");
+    }
+    vi.spyOn(models, "listOllamaModels").mockReturnValue(["qwen2.5-coder:14b"]);
+    const project = makeProjectDir();
+    setPromptAdapter(
+      scriptedPrompts([
+        "quick — No verifiers — orchestrator is the quality gate",
+        "api",
+        "ollama:qwen2.5-coder:14b",
+        "12",
+        "3",
+        "standard",
+        "Ship it locally",
+        "Skip",
+      ]),
+    );
+    const io = captureOutput();
+
+    expect(runCli(["--project", project])).toBe(0);
+    expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
+      orchestrator: "api",
+      orchestratorModel: "ollama:qwen2.5-coder:14b",
+    });
+    io.restore();
   });
 
   it("writes a test report for test mode runs", () => {

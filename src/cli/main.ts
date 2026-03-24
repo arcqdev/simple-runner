@@ -4,12 +4,19 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { loadDotEnv } from "../config/dotenv.js";
-import { getTeamByName } from "../config/team-config.js";
+import {
+  buildRuntimeTeamConfig,
+  generateAutoTeam,
+  getTeamByName,
+  saveTeamConfig,
+  type TeamConfig,
+} from "../config/team-config.js";
 import { CliError, EXIT_ERROR } from "../core/errors.js";
 import { emit as emitLogEvent, init as initLog, RunDir } from "../logging/log.js";
 import { VERSION } from "../core/version.js";
 import { findIncompleteRuns, getRunById, runsRoot } from "../logging/runs.js";
 import { executePendingRun, resumeRun } from "../runtime/engine.js";
+import { availableBackends } from "../runtime/backends.js";
 import { parseMainArgs, isHandledAsSubcommand } from "./params.js";
 import { getPromptAdapter } from "./prompts.js";
 import {
@@ -39,7 +46,7 @@ import {
 } from "./runtime.js";
 import { handleSubcommand } from "./subcommands.js";
 import type { ParsedMain } from "./types.js";
-import { emitJson, printLines, writeStderr } from "./ui.js";
+import { emitJson, printLines, setProgressOutput, writeStderr } from "./ui.js";
 
 const HELP_TEXT = [
   "usage: kodo [-h] [--version] [--resume [RUN_ID]] [--goal GOAL | --goal-file GOAL_FILE | --improve | --test | --fix-from RUN_ID]",
@@ -322,11 +329,70 @@ function teamAgentNames(teamName: string, projectDir: string): string[] {
   return team === null ? [] : Object.keys(team.config.agents);
 }
 
+function resolveTeamConfigForLaunch(
+  teamName: string,
+  projectDir: string,
+  options: { allowPrompt: boolean; autoApprove: boolean; jsonMode: boolean },
+): TeamConfig {
+  const listing = getTeamByName(teamName, undefined, projectDir);
+  if (listing === null) {
+    throw new CliError(`Unknown team: ${teamName}`);
+  }
+
+  try {
+    return buildRuntimeTeamConfig(listing.config, listing.path).config;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes("No agents available after checking backends")) {
+      throw new CliError(`Invalid team config: ${message}`);
+    }
+    if (!Object.values(availableBackends()).some(Boolean)) {
+      return listing.config;
+    }
+
+    const repair = (): TeamConfig => {
+      const generated = generateAutoTeam(teamName);
+      const savedPath = saveTeamConfig(teamName, generated.config);
+      const resolved = buildRuntimeTeamConfig(generated.config, savedPath).config;
+      const note = `Recovered team '${teamName}' by generating a runnable config at ${savedPath}.`;
+      if (options.jsonMode) {
+        writeStderr(`${note}\n`);
+      } else {
+        printLines(["", `  ${note}`]);
+      }
+      return resolved;
+    };
+
+    if (options.autoApprove) {
+      return repair();
+    }
+
+    if (options.allowPrompt) {
+      writeStderr(
+        `Team '${teamName}' could not be built: ${message}\nThis usually means the configured worker backends are unavailable.\n`,
+      );
+      const confirmed = getPromptAdapter().confirm(
+        "Run 'kodo teams auto' and retry with a generated working team?",
+        true,
+      );
+      if (confirmed === null) {
+        throw new CliError("Cancelled.");
+      }
+      if (confirmed) {
+        return repair();
+      }
+    }
+
+    throw new CliError(`Team '${teamName}' could not be built: ${message}`);
+  }
+}
+
 function writeRunArtifacts(
   runDir: RunDir,
   params: ResolvedRuntimeParams,
   goal: ResolvedGoal,
   plan: SpecializedGoalPlan | null,
+  teamConfig: TeamConfig,
 ): void {
   writeFileSync(runDir.configFile, `${JSON.stringify(params, null, 2)}\n`, "utf8");
   writeFileSync(runDir.goalFile, `${goal.goalText ?? ""}\n`, "utf8");
@@ -336,11 +402,7 @@ function writeRunArtifacts(
   if (plan !== null) {
     writeFileSync(runDir.goalPlanFile, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
   }
-
-  const team = getTeamByName(params.team, undefined, runDir.projectDir);
-  if (team !== null) {
-    writeFileSync(runDir.teamFile, `${JSON.stringify(team.config, null, 2)}\n`, "utf8");
-  }
+  writeFileSync(runDir.teamFile, `${JSON.stringify(teamConfig, null, 2)}\n`, "utf8");
 }
 
 function createPendingRun(parsed: ParsedMain): {
@@ -352,7 +414,18 @@ function createPendingRun(parsed: ParsedMain): {
   const params = loadOrResolveRuntimeParams(parsed.flags);
   const runDir = RunDir.create(parsed.flags.project);
   const { goal, notices, plan } = buildModeGoal(parsed, runDir);
-  writeRunArtifacts(runDir, params, goal, plan);
+  const nonInteractiveLaunch =
+    parsed.flags.goal !== null ||
+    parsed.flags.goalFile !== null ||
+    parsed.flags.improve ||
+    parsed.flags.test ||
+    parsed.flags.fixFrom !== null;
+  const resolvedTeamConfig = resolveTeamConfigForLaunch(params.team, parsed.flags.project, {
+    allowPrompt: !parsed.flags.yes && !parsed.flags.json,
+    autoApprove: parsed.flags.yes || parsed.flags.json || nonInteractiveLaunch,
+    jsonMode: parsed.flags.json,
+  });
+  writeRunArtifacts(runDir, params, goal, plan, resolvedTeamConfig);
   initLog(runDir);
   emitLogEvent("cli_args", {
     ...params,
@@ -498,6 +571,10 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
   };
 
   if (parsed.flags.json) {
+    if (notices.length > 0) {
+      printLines(notices.map((notice) => `  ${notice}`));
+    }
+    printLines([result.message]);
     emitJson(summary);
     return;
   }
@@ -583,6 +660,7 @@ function emitError(error: unknown, jsonMode: boolean): number {
 export function runCli(argv = process.argv.slice(2)): number {
   loadDotEnv();
   const jsonMode = argv.includes("--json");
+  setProgressOutput(jsonMode ? "stderr" : "stdout");
 
   try {
     if (argv.length === 0) {
@@ -650,6 +728,8 @@ export function runCli(argv = process.argv.slice(2)): number {
     return 0;
   } catch (error) {
     return emitError(error, jsonMode);
+  } finally {
+    setProgressOutput("stdout");
   }
 }
 

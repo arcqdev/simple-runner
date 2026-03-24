@@ -5,9 +5,11 @@ import { spawnSync } from "node:child_process";
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
 import {
+  buildRuntimeTeamConfig,
   type TeamAgentConfig,
   type TeamConfig,
   getTeamByName,
+  loadTeamConfigFile,
   TEAM_BACKEND_MAP,
 } from "../config/team-config.js";
 import { emit as emitLogEvent, type RunDir } from "../logging/log.js";
@@ -319,6 +321,7 @@ function makeRuntimeAgent(
 }
 
 function collectRuntimeAgents(
+  runDir: RunDir,
   params: ResolvedRuntimeParams,
   flags: MainFlags,
   state: RuntimeState,
@@ -328,15 +331,20 @@ function collectRuntimeAgents(
   workerAgents: RuntimeAgent[];
 } {
   const listing = getTeamByName(params.team, undefined, flags.project);
-  if (listing === null) {
+  const config =
+    existsSync(runDir.teamFile)
+      ? loadTeamConfigFile(runDir.teamFile)
+      : listing?.config ?? null;
+  if (config === null) {
     throw new Error(`Team not found: ${params.team}`);
   }
+  const resolvedConfig = buildRuntimeTeamConfig(config, existsSync(runDir.teamFile) ? runDir.teamFile : listing?.path).config;
 
-  const groups = verificationGroups(listing.config);
-  const configuredWorkers = workerNames(listing.config, groups);
+  const groups = verificationGroups(resolvedConfig);
+  const configuredWorkers = workerNames(resolvedConfig, groups);
   const runtimeAgents = new Map<string, RuntimeAgent>();
 
-  for (const [name, agentConfig] of Object.entries(listing.config.agents)) {
+  for (const [name, agentConfig] of Object.entries(resolvedConfig.agents)) {
     const agent = makeRuntimeAgent(name, agentConfig, state.agentSessionIds[name] ?? null);
     if (agent !== null) {
       runtimeAgents.set(name, agent);
@@ -523,7 +531,12 @@ function runSingleGoal(
   acceptCriteria?: string,
   stageLabel?: string,
 ): OrchestrationResult {
-  const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(params, flags, state);
+  const { allAgents, reviewerAgents, workerAgents } = collectRuntimeAgents(
+    runDir,
+    params,
+    flags,
+    state,
+  );
   if (workerAgents.length === 0) {
     closeAgents(allAgents);
     throw new Error("No runnable workers available for the selected team.");

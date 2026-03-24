@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs";
 import os from "node:os";
 
+import {
+  apiOrchestratorModelOptions,
+  availableModelChoices,
+  checkApiKey,
+  defaultApiModel,
+  impliedOrchestratorFromModel,
+  listOllamaModels,
+  normalizeOllamaModel,
+} from "../config/models.js";
 import { getTeamByName, listAvailableTeams } from "../config/team-config.js";
 import { loadProjectConfig, saveProjectConfig } from "../config/project-config.js";
 import { getUserDefault } from "../config/user-config.js";
@@ -31,17 +40,6 @@ export type ResolvedGoal = {
 type SavedRuntimeParams = Partial<ResolvedRuntimeParams> & Record<string, unknown>;
 
 const CLI_ORCHESTRATORS = new Set(["claude-code", "gemini-cli", "codex", "cursor", "kimi-code"]);
-const API_KEY_ENV_VARS = [
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "GEMINI_API_KEY",
-  "GOOGLE_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "GROQ_API_KEY",
-  "OPENROUTER_API_KEY",
-  "MISTRAL_API_KEY",
-  "XAI_API_KEY",
-] as const;
 
 function parseOrchestratorFlag(value: string | null): {
   backend: string | null;
@@ -64,26 +62,14 @@ function parseOrchestratorFlag(value: string | null): {
 }
 
 function hasAnyApiKey(env = process.env): boolean {
-  return API_KEY_ENV_VARS.some((key) => {
-    const value = env[key];
-    return typeof value === "string" && value.trim().length > 0;
-  });
+  return availableModelChoices(env).length > 0;
 }
 
-function defaultApiModel(env = process.env): string {
-  if (typeof env.ANTHROPIC_API_KEY === "string" && env.ANTHROPIC_API_KEY.trim()) {
-    return "opus";
+function genericApiKeyError(orchestrator: string, model: string | null): string | null {
+  if (orchestrator !== "api" || model === null || isOllamaLike(model) || hasAnyApiKey()) {
+    return null;
   }
-  if (typeof env.OPENAI_API_KEY === "string" && env.OPENAI_API_KEY.trim()) {
-    return "gpt-5.4";
-  }
-  if (
-    (typeof env.GEMINI_API_KEY === "string" && env.GEMINI_API_KEY.trim()) ||
-    (typeof env.GOOGLE_API_KEY === "string" && env.GOOGLE_API_KEY.trim())
-  ) {
-    return "gemini-2.5-flash";
-  }
-  return "gemini-2.5-flash";
+  return "API orchestrator selected but no provider API key was found in the environment.";
 }
 
 function preferredOrchestrator(): string {
@@ -182,12 +168,10 @@ function selectTeam(defaultValue: string, projectDir: string): string {
 function selectOrchestrator(): { orchestrator: string; orchestratorModel: string } {
   const prompt = getPromptAdapter();
   const backends = availableBackends();
-  const hasApi = hasAnyApiKey();
+  const hasApi = hasAnyApiKey() || listOllamaModels().length > 0;
   const choices: string[] = [];
 
-  if (hasApi) {
-    choices.push("api (recommended — delegates cleanly, pay-per-token)");
-  }
+  choices.push("api (recommended — delegates cleanly, pay-per-token)");
   if (backends.claude) {
     choices.push("claude-code (free on Max subscription)");
   }
@@ -218,37 +202,74 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
     throw new CliError("Cancelled.");
   }
   const orchestrator = selected.split(" (")[0] ?? selected;
-
-  const modelChoices: Record<string, string[]> = {
-    api: ["gpt-5.4", "opus", "gemini-2.5-flash", "(custom)"],
-    "claude-code": ["opus", "sonnet", "(custom)"],
-    "gemini-cli": ["gemini-3-flash", "gemini-3-pro", "gemini-2.5-flash", "(custom)"],
-    codex: ["gpt-5.4", "gpt-5.3-codex", "o3", "(custom)"],
-    cursor: ["composer-1.5", "sonnet-4-thinking", "gpt-5", "(custom)"],
-    "kimi-code": ["kimi-k2.5", "(custom)"],
-  };
-
   const defaultModel = defaultCliModel(orchestrator);
-  const modelChoice = prompt.select(
-    "Orchestrator model:",
-    modelChoices[orchestrator] ?? [defaultModel, "(custom)"],
-    defaultModel,
-  );
-  if (modelChoice === null) {
-    throw new CliError("Cancelled.");
-  }
-  if (modelChoice !== "(custom)") {
-    return { orchestrator, orchestratorModel: modelChoice };
+
+  let modelChoices: string[];
+  switch (orchestrator) {
+    case "api": {
+      modelChoices = availableModelChoices()
+        .map(([alias, displayName, providerName]) => `${alias} — ${displayName} (${providerName})`)
+        .concat(listOllamaModels().map((model) => `ollama:${model}`));
+      if (modelChoices.length === 0) {
+        modelChoices = apiOrchestratorModelOptions();
+      }
+      modelChoices = [...modelChoices, "(custom)"];
+      break;
+    }
+    case "claude-code":
+      modelChoices = ["opus", "sonnet", "(custom)"];
+      break;
+    case "gemini-cli":
+      modelChoices = ["gemini-3-flash", "gemini-3-pro", "gemini-2.5-flash", "(custom)"];
+      break;
+    case "codex":
+      modelChoices = ["gpt-5.4", "gpt-5.3-codex", "o3", "(custom)"];
+      break;
+    case "cursor":
+      modelChoices = ["composer-1.5", "sonnet-4-thinking", "gpt-5", "(custom)"];
+      break;
+    default:
+      modelChoices = [defaultModel, "(custom)"];
+      break;
   }
 
-  const custom = prompt.text("  Model name (provider:model or alias)", defaultModel);
-  if (custom === null) {
+  const defaultChoice =
+    modelChoices.find((choice) => choice.startsWith(`${defaultModel} —`) || choice === defaultModel) ??
+    modelChoices[0] ??
+    defaultModel;
+  const selectedModel = prompt.select("Orchestrator model:", modelChoices, defaultChoice);
+  if (selectedModel === null) {
     throw new CliError("Cancelled.");
   }
-  if (custom.trim().length === 0) {
-    throw new CliError("Model name must not be empty.");
+
+  let orchestratorModel: string;
+  if (selectedModel === "(custom)") {
+    const custom = prompt.text("  Model name (provider:model or alias)", defaultModel);
+    if (custom === null) {
+      throw new CliError("Cancelled.");
+    }
+    if (custom.trim().length === 0) {
+      throw new CliError("Model name must not be empty.");
+    }
+    orchestratorModel = custom.trim();
+  } else {
+    orchestratorModel = selectedModel.includes(" — ")
+      ? (selectedModel.split(" — ")[0] ?? selectedModel).trim()
+      : selectedModel;
   }
-  return { orchestrator, orchestratorModel: custom.trim() };
+
+  if (isOllamaLike(orchestratorModel)) {
+    orchestratorModel = normalizeOllamaModel(orchestratorModel);
+  }
+  const keyError = genericApiKeyError(orchestrator, orchestratorModel) ?? checkApiKey(orchestrator, orchestratorModel);
+  if (keyError !== null) {
+    throw new CliError(`${keyError}\nSet the key in your environment or .env file and try again.`);
+  }
+  return { orchestrator, orchestratorModel };
+}
+
+function isOllamaLike(model: string): boolean {
+  return model === "ollama-local" || model.startsWith("ollama:") || model.startsWith("ollama/");
 }
 
 function isSavedRuntimeParams(value: SavedRuntimeParams | null): value is ResolvedRuntimeParams {
@@ -375,7 +396,7 @@ export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
     if (explicitBackend !== null) {
       orchestrator = explicitBackend;
     } else if (explicitModel !== null) {
-      orchestrator = "api";
+      orchestrator = impliedOrchestratorFromModel(explicitModel) ?? "api";
     } else if (hasAnyApiKey()) {
       orchestrator = "api";
     } else {
@@ -384,10 +405,14 @@ export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
 
     orchestratorModel ??= defaultCliModel(orchestrator);
 
-    if (orchestrator === "api" && !hasAnyApiKey()) {
-      throw new CliError(
-        "API orchestrator selected but no provider API key was found in the environment.",
-      );
+    if (orchestratorModel !== null && isOllamaLike(orchestratorModel)) {
+      orchestratorModel = normalizeOllamaModel(orchestratorModel);
+    }
+    const keyError =
+      genericApiKeyError(orchestrator, orchestratorModel) ??
+      checkApiKey(orchestrator, orchestratorModel);
+    if (keyError !== null) {
+      throw new CliError(keyError);
     }
   }
 

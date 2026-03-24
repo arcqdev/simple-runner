@@ -42,6 +42,12 @@ export type TeamListing = {
   path: string;
 };
 
+export type BuiltRuntimeTeam = {
+  config: TeamConfig;
+  skipped: Array<{ agent: string; backend: string }>;
+  warnings: string[];
+};
+
 export const TEAM_BACKEND_MAP: Record<TeamBackend, BackendKey | ""> = {
   claude: "claude",
   "claude-cli": "claude",
@@ -65,6 +71,23 @@ export const AGENT_DEFAULTS = {
   system_prompt: undefined,
   timeout_s: undefined,
 } as const;
+
+const AGENT_NOTES_INSTRUCTION = `
+
+Agent notes:
+- Leave a concise summary of what you changed or verified.
+- Name the files you touched or inspected when relevant.
+- Call out blockers instead of silently stopping.
+`;
+
+const ROLE_PROMPTS: Record<string, string> = {
+  architect:
+    "You are the architecture reviewer. Focus on design decisions, structural risk, and maintainability. Do not implement features.",
+  tester:
+    "You are the implementation verifier. Check the repository honestly, reproduce the claimed behavior when possible, and report defects clearly. Do not fix issues.",
+  tester_browser:
+    "You are the browser verifier. Use browser-based validation when relevant, confirm the user flow, and report concrete failures. Do not fix issues.",
+};
 
 export function teamsDir(homeDir = os.homedir()): string {
   const result = path.join(homeDir, ".kodo", "teams");
@@ -93,10 +116,125 @@ function validateTeamConfigShape(config: unknown, sourcePath: string): TeamConfi
   return config as TeamConfig;
 }
 
+function validateVerifierShape(verifiers: unknown, sourcePath: string): Record<string, string[]> {
+  if (verifiers === undefined) {
+    return {};
+  }
+  if (typeof verifiers !== "object" || verifiers === null || Array.isArray(verifiers)) {
+    throw new Error(`Team config 'verifiers' must be an object in ${sourcePath}`);
+  }
+
+  const result: Record<string, string[]> = {};
+  for (const [role, value] of Object.entries(verifiers)) {
+    if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+      throw new Error(`Verifier role '${role}' must be an array of agent names in ${sourcePath}`);
+    }
+    result[role] = [...value];
+  }
+  return result;
+}
+
+function resolvedSystemPrompt(agentKey: string, explicitPrompt?: string): string {
+  const base = explicitPrompt ?? ROLE_PROMPTS[agentKey] ?? "";
+  return `${base}${AGENT_NOTES_INSTRUCTION}`.trim();
+}
+
+function normalizedAgentConfig(agentKey: string, agentConfig: unknown, sourcePath: string): TeamAgentConfig {
+  if (typeof agentConfig !== "object" || agentConfig === null || Array.isArray(agentConfig)) {
+    throw new Error(`Agent '${agentKey}' config must be an object in ${sourcePath}`);
+  }
+
+  const typed = agentConfig as Partial<TeamAgentConfig>;
+  if (typeof typed.backend !== "string" || typed.backend.length === 0) {
+    throw new Error(`Agent '${agentKey}' must have a 'backend' field in ${sourcePath}`);
+  }
+  if (!(typed.backend in TEAM_BACKEND_MAP)) {
+    throw new Error(
+      `Agent '${agentKey}' has unknown backend '${typed.backend}' in ${sourcePath}. Valid backends: ${Object.keys(TEAM_BACKEND_MAP).join(", ")}`,
+    );
+  }
+
+  const backendKey = TEAM_BACKEND_MAP[typed.backend as TeamBackend];
+  const model =
+    typeof typed.model === "string" && typed.model.trim().length > 0
+      ? typed.model.trim()
+      : backendKey !== "" && isBackendKey(backendKey)
+        ? smartModelForBackend(backendKey)
+        : undefined;
+
+  return {
+    backend: typed.backend as TeamBackend,
+    chrome: typed.chrome ?? AGENT_DEFAULTS.chrome,
+    description: typed.description ?? AGENT_DEFAULTS.description,
+    fallback_model: typed.fallback_model ?? AGENT_DEFAULTS.fallback_model,
+    max_turns: typed.max_turns ?? AGENT_DEFAULTS.max_turns,
+    model,
+    session_timeout_s: typed.session_timeout_s ?? AGENT_DEFAULTS.session_timeout_s,
+    system_prompt: resolvedSystemPrompt(agentKey, typed.system_prompt),
+    timeout_s: typed.timeout_s ?? AGENT_DEFAULTS.timeout_s,
+  };
+}
+
 export function loadTeamConfigFile(filePath: string): TeamConfig {
   const raw = readFileSync(filePath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   return validateTeamConfigShape(parsed, filePath);
+}
+
+export function buildRuntimeTeamConfig(
+  config: TeamConfig,
+  sourcePath = "<team config>",
+  backends = availableBackends(),
+): BuiltRuntimeTeam {
+  const agents: Record<string, TeamAgentConfig> = {};
+  const skipped: Array<{ agent: string; backend: string }> = [];
+  const warnings: string[] = [];
+
+  for (const [agentKey, agentConfig] of Object.entries(config.agents)) {
+    const normalized = normalizedAgentConfig(agentKey, agentConfig, sourcePath);
+    const backendKey = TEAM_BACKEND_MAP[normalized.backend];
+    if (backendKey !== "" && isBackendKey(backendKey) && !backends[backendKey]) {
+      skipped.push({ agent: agentKey, backend: normalized.backend });
+      warnings.push(`Skipping agent '${agentKey}': backend '${normalized.backend}' is unavailable`);
+      continue;
+    }
+    agents[agentKey] = normalized;
+  }
+
+  if (Object.keys(agents).length === 0) {
+    throw new Error(
+      "No agents available after checking backends. Install at least one of: claude, cursor, codex, or gemini-cli.",
+    );
+  }
+
+  const verifiers = validateVerifierShape(config.verifiers, sourcePath);
+  const cleanedVerifiers: Record<string, string[]> = {};
+  for (const [role, agentKeys] of Object.entries(verifiers)) {
+    const valid = agentKeys.filter((agentKey) => {
+      const present = agentKey in agents;
+      if (!present) {
+        warnings.push(
+          `Verifier role '${role}' references unavailable or missing agent '${agentKey}' and was pruned`,
+        );
+      }
+      return present;
+    });
+    if (valid.length > 0) {
+      cleanedVerifiers[role] = valid;
+    }
+  }
+
+  return {
+    config: {
+      agents,
+      description: config.description,
+      name: config.name,
+      orchestrator_prompt: config.orchestrator_prompt,
+      verifiers: cleanedVerifiers,
+    },
+    skipped,
+    warnings,
+  };
 }
 
 export function listAvailableTeams(homeDir = os.homedir()): TeamListing[] {

@@ -2,7 +2,17 @@ import process from "node:process";
 
 import { stringifyJson } from "../runtime/json.js";
 
+let progressStream: "stdout" | "stderr" = "stdout";
+
+export function setProgressOutput(target: "stdout" | "stderr"): void {
+  progressStream = target;
+}
+
 export function writeStdout(text: string): void {
+  if (progressStream === "stderr") {
+    process.stderr.write(text);
+    return;
+  }
   process.stdout.write(text);
 }
 
@@ -11,7 +21,7 @@ export function writeStderr(text: string): void {
 }
 
 export function emitJson(payload: Record<string, unknown>): void {
-  writeStdout(`${stringifyJson(payload)}\n`);
+  process.stdout.write(`${stringifyJson(payload)}\n`);
 }
 
 export function printLines(lines: string[]): void {
