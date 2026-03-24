@@ -37,6 +37,11 @@ import {
 import { AsyncSummarizer } from "./summarizer.js";
 import { readRunStatus, writeRunStatus } from "./run-status.js";
 
+// Orchestration currently persists one opaque sessionId per agent and assumes
+// synchronous prompt/response queries. The ACP contract in
+// src/runtime/acp-contract.ts expands that into transport capabilities,
+// streaming events, and resumable conversation locators that later specs
+// should adapt back into this runtime state.
 type VerificationGroups = {
   browserTesterNames: string[];
   reviewerNames: string[];

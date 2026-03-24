@@ -2,9 +2,13 @@ import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
 import { classifySessionError } from "./sessions.js";
 
+// These backend keys describe the current executable/preflight layer. ACP
+// rollout work should keep user-facing backend labels stable while mapping them
+// onto the backend profiles defined in src/runtime/acp-contract.ts.
 export type BackendKey = "claude" | "codex" | "cursor" | "gemini-cli" | "kimi";
 export type TeamBackend = "claude" | "claude-cli" | "cursor" | "codex" | "gemini-cli";
 

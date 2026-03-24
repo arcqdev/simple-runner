@@ -5,6 +5,10 @@ import process from "node:process";
 import { emit as emitLogEvent, saveConversation } from "../logging/log.js";
 import type { JsonObject } from "./json.js";
 
+// Current subprocess adapters are the legacy runtime surface. ACP migration
+// work should use src/runtime/acp-contract.ts as the source of truth for
+// transport/session semantics and treat the types in this file as the
+// compatibility layer that must eventually be implemented on top of ACP.
 export type SessionBackend = "claude-cli" | "codex" | "cursor" | "gemini-cli";
 export type TeamSessionBackend = "claude" | "claude-cli" | "codex" | "cursor" | "gemini-cli";
 
