@@ -21,7 +21,7 @@ function makeTempDir(prefix: string): string {
 }
 
 function useOnlyPath(binDir: string): void {
-  process.env.PATH = binDir;
+  process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
 }
 
 function writeExecutable(filePath: string, content: string): void {
@@ -63,6 +63,9 @@ if (process.env.FAKE_CODEX_MODE === "background-error") {
   console.log(JSON.stringify({ type: "background_event", message: "status 401 unauthorized" }));
   process.exit(0);
 }
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+require("node:fs").mkdirSync(stateDir, { recursive: true });
+require("node:fs").writeFileSync(require("node:path").join(stateDir, "codex-argv.json"), JSON.stringify(args), "utf8");
 const resumeIndex = args.indexOf("resume");
 const resumed = resumeIndex !== -1 ? args[resumeIndex + 1] : null;
 console.log(JSON.stringify({ type: "thread.started", thread_id: resumed ?? "thread-1" }));
@@ -75,6 +78,58 @@ if (prompt.includes("Verify the repository state honestly.")) {
 }
 `;
   writeExecutable(path.join(binDir, "codex"), script);
+}
+
+function installFakeClaude(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("Claude Code CLI 1.0.0");
+  process.exit(0);
+}
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+fs.mkdirSync(stateDir, { recursive: true });
+fs.writeFileSync(path.join(stateDir, "claude-argv.json"), JSON.stringify(args), "utf8");
+console.log(JSON.stringify({ type: "system", session_id: args.includes("--resume") ? args[args.indexOf("--resume") + 1] : "claude-session-1" }));
+console.log(JSON.stringify({ type: "assistant", message: "GOAL_DONE: Claude completed" }));
+`;
+  writeExecutable(path.join(binDir, "claude"), script);
+}
+
+function installFakeCursor(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("cursor-agent 1.0.0");
+  process.exit(0);
+}
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+fs.mkdirSync(stateDir, { recursive: true });
+fs.writeFileSync(path.join(stateDir, "cursor-argv.json"), JSON.stringify(args), "utf8");
+console.log(JSON.stringify({ type: "result", result: "GOAL_DONE: Cursor completed", chatId: args.includes("--resume") ? args[args.indexOf("--resume") + 1] : "cursor-chat-1" }));
+`;
+  writeExecutable(path.join(binDir, "cursor-agent"), script);
+}
+
+function installFakeGemini(binDir: string): void {
+  const script = `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("gemini 1.0.0");
+  process.exit(0);
+}
+const stateDir = process.env.FAKE_AGENT_STATE_DIR || process.cwd();
+fs.mkdirSync(stateDir, { recursive: true });
+fs.writeFileSync(path.join(stateDir, "gemini-argv.json"), JSON.stringify(args), "utf8");
+console.log(JSON.stringify({ response: "GOAL_DONE: Gemini completed", stats: { models: { primary: { tokens: { prompt: 3, candidates: 2 } } } } }));
+`;
+  writeExecutable(path.join(binDir, "gemini"), script);
 }
 
 afterEach(() => {
@@ -122,7 +177,7 @@ describe("session adapters", () => {
     expect(log).toContain('"event":"session_query_end"');
     expect(log).toContain('"event":"session_reset"');
     expect(log).toContain('"session_id":"thread-1"');
-  });
+  }, 10000);
 
   it("classifies timeouts and logs session_timeout", () => {
     const binDir = makeTempDir("kodo-bin");
@@ -216,6 +271,50 @@ describe("session adapters", () => {
 
     expect(result?.isError).toBe(true);
     expect(result?.text).toContain("SIGTERM");
+  });
+
+  it("injects resume ids using backend-specific commands", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    installFakeClaude(binDir);
+    installFakeCursor(binDir);
+    installFakeGemini(binDir);
+    useOnlyPath(binDir);
+
+    const projectDir = makeTempDir("kodo-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+
+    const codex = createSessionForOrchestrator("codex", "gpt-5.4", {
+      resumeSessionId: "thread-saved",
+    });
+    codex?.query("ship it", { maxTurns: 1, projectDir });
+    expect(JSON.parse(readFileSync(path.join(projectDir, "codex-argv.json"), "utf8"))).toEqual(
+      expect.arrayContaining(["exec", "resume", "thread-saved"]),
+    );
+
+    const claude = createSessionForOrchestrator("claude-code", "opus", {
+      resumeSessionId: "claude-saved",
+    });
+    claude?.query("ship it", { maxTurns: 1, projectDir });
+    expect(JSON.parse(readFileSync(path.join(projectDir, "claude-argv.json"), "utf8"))).toEqual(
+      expect.arrayContaining(["--resume", "claude-saved"]),
+    );
+
+    const cursor = createSessionForOrchestrator("cursor", "composer", {
+      resumeSessionId: "cursor-saved",
+    });
+    cursor?.query("ship it", { maxTurns: 1, projectDir });
+    expect(JSON.parse(readFileSync(path.join(projectDir, "cursor-argv.json"), "utf8"))).toEqual(
+      expect.arrayContaining(["--resume", "cursor-saved"]),
+    );
+
+    const gemini = createSessionForOrchestrator("gemini-cli", "gemini-3-flash", {
+      resumeSessionId: "last",
+    });
+    gemini?.query("ship it", { maxTurns: 1, projectDir });
+    expect(JSON.parse(readFileSync(path.join(projectDir, "gemini-argv.json"), "utf8"))).toEqual(
+      expect.arrayContaining(["--resume"]),
+    );
   });
 });
 

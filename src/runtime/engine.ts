@@ -358,6 +358,33 @@ function inferGoalSource(runDir: RunDir): ResolvedGoal["source"] {
   return "goal";
 }
 
+function seedResumeRuntimeState(runDir: RunDir, state: NonNullable<ReturnType<typeof getRunById>>): void {
+  const filePath = path.join(runDir.root, "runtime-state.json");
+  if (existsSync(filePath)) {
+    return;
+  }
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(
+    filePath,
+    `${JSON.stringify(
+      {
+        agentSessionIds: state.agentSessionIds,
+        completedCycles: state.completedCycles,
+        completedStages: state.completedStages,
+        currentStageCycles: state.currentStageCycles,
+        finished: state.finished,
+        lastSummary: state.lastSummary,
+        parallelStageState: state.parallelStageState,
+        pendingExchanges: state.pendingExchanges,
+        stageSummaries: state.stageSummaries,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 export function resumeRun(target: ResumeTarget): ExecutionResult {
   const state = getRunById(target.runId);
   if (state === null) {
@@ -368,6 +395,7 @@ export function resumeRun(target: ResumeTarget): ExecutionResult {
   }
 
   const runDir = RunDir.fromLogFile(target.logFile, state.projectDir);
+  seedResumeRuntimeState(runDir, state);
   initAppend(target.logFile);
   const params = existsSync(runDir.configFile)
     ? loadRuntimeParams(runDir)

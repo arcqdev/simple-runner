@@ -24,6 +24,7 @@ const ORIGINAL_STATE_DIR = process.env.FAKE_AGENT_STATE_DIR;
 const ORIGINAL_CLAUDE_NUDGE = process.env.FAKE_CLAUDE_NUDGE;
 const ORIGINAL_TESTER_MODE = process.env.FAKE_TESTER_MODE;
 const ORIGINAL_BROWSER_MODE = process.env.FAKE_BROWSER_MODE;
+const ORIGINAL_PARALLEL_RESUME_LOG = process.env.FAKE_PARALLEL_RESUME_LOG;
 
 function makeTempDir(prefix: string): string {
   const directory = path.join(
@@ -71,6 +72,8 @@ if (args.includes("--version")) {
 }
 
 const prompt = promptFromArgs(args);
+const resumeIndex = args.indexOf("resume");
+const resumed = resumeIndex === -1 ? null : args[resumeIndex + 1];
 const cdIndex = args.indexOf("--cd");
 const projectDir = cdIndex === -1 ? process.cwd() : args[cdIndex + 1];
 const stateDir = process.env.FAKE_AGENT_STATE_DIR || projectDir;
@@ -154,6 +157,9 @@ if (prompt.includes("Current Stage (2/4): Parallel A") || prompt.includes("Curre
   const label = prompt.includes("Parallel A") ? "parallel-a" : "parallel-b";
   const startedAt = Date.now();
   fs.appendFileSync(startFile, label + ":" + startedAt + "\\n", "utf8");
+  if (process.env.FAKE_PARALLEL_RESUME_LOG && resumed) {
+    fs.appendFileSync(process.env.FAKE_PARALLEL_RESUME_LOG, label + ":" + resumed + "\\n", "utf8");
+  }
   spawnSync(process.execPath, ["-e", "setTimeout(() => process.exit(0), 350)"]);
   fs.writeFileSync(path.join(projectDir, label + ".txt"), "done\\n", "utf8");
   console.log(JSON.stringify({ type: "agent_message", message: "GOAL_DONE: " + label + " finished" }));
@@ -373,6 +379,11 @@ afterEach(() => {
   } else {
     process.env.FAKE_BROWSER_MODE = ORIGINAL_BROWSER_MODE;
   }
+  if (ORIGINAL_PARALLEL_RESUME_LOG === undefined) {
+    delete process.env.FAKE_PARALLEL_RESUME_LOG;
+  } else {
+    process.env.FAKE_PARALLEL_RESUME_LOG = ORIGINAL_PARALLEL_RESUME_LOG;
+  }
 });
 
 describe("runtime orchestration", () => {
@@ -460,6 +471,70 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"orchestrator_retry"');
     expect(log).toContain('"event":"orchestrator_done_accepted"');
   }, 10000);
+
+  it("restores a pending single-goal exchange on resume without re-running the worker prompt", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("resume-pending-project");
+    process.env.FAKE_AGENT_STATE_DIR = projectDir;
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_resume_pending"));
+    init(runDir);
+    writeFileSync(
+      path.join(runDir.root, "runtime-state.json"),
+      `${JSON.stringify(
+        {
+          agentSessionIds: { worker_fast: "thread-saved" },
+          completedCycles: 0,
+          completedStages: [],
+          currentStageCycles: 1,
+          finished: false,
+          lastSummary: "",
+          parallelStageState: {},
+          pendingExchanges: [
+            {
+              agentName: "worker_fast",
+              cycleIndex: 1,
+              directiveTerminal: "goal_done",
+              goalText: "Resume interrupted work",
+              priorSummary: "",
+              responseIsError: false,
+              responseText: "GOAL_DONE: restored pending exchange",
+              scope: "single",
+              sessionId: "thread-saved",
+              summary: "restored pending exchange",
+            },
+          ],
+          stageSummaries: [],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Resume interrupted work"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    expect(existsSync(path.join(projectDir, "worker-output.txt"))).toBe(false);
+    const persisted = JSON.parse(
+      readFileSync(path.join(runDir.root, "runtime-state.json"), "utf8"),
+    ) as { pendingExchanges: unknown[] };
+    expect(persisted.pendingExchanges).toEqual([]);
+  });
 
   it("supports verification=skip without running verifiers", () => {
     const binDir = makeTempDir("kodo-bin");
@@ -863,6 +938,125 @@ describe("runtime orchestration", () => {
     expect(log).toContain('"event":"parallel_group_end"');
     expect(log).toContain('"event":"persist_stage_merge"');
     expect(log).toContain("Final Sequential");
+  }, 12000);
+
+  it("restores saved parallel stage sessions when resuming a staged run", () => {
+    const binDir = makeTempDir("kodo-bin");
+    installFakeCodex(binDir);
+    process.env.PATH = `${binDir}${path.delimiter}${ORIGINAL_PATH ?? ""}`;
+
+    const projectDir = makeTempDir("parallel-resume-project");
+    const stateDir = makeTempDir("parallel-resume-state");
+    const resumeLog = path.join(stateDir, "parallel-resumes.txt");
+    process.env.FAKE_AGENT_STATE_DIR = stateDir;
+    process.env.FAKE_PARALLEL_RESUME_LOG = resumeLog;
+    initGitRepo(projectDir);
+    writeProjectTeam(projectDir, {
+      agents: {
+        worker_fast: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+        worker_slow: { backend: "codex", model: "gpt-5.4", max_turns: 3 },
+      },
+      verifiers: { browser_testers: [], reviewers: [], testers: [] },
+    });
+
+    const runDir = RunDir.create(projectDir, uniqueRunId("runtime_parallel_resume"));
+    init(runDir);
+    writeFileSync(
+      runDir.goalPlanFile,
+      `${JSON.stringify(
+        {
+          context: "Maintain the simple project.",
+          stages: [
+            { index: 1, name: "Setup", description: "Create the initial setup artifact." },
+            {
+              index: 2,
+              name: "Parallel A",
+              description: "Run branch A in parallel.",
+              parallel_group: 1,
+            },
+            {
+              index: 3,
+              name: "Parallel B",
+              description: "Run branch B in parallel.",
+              parallel_group: 1,
+            },
+            { index: 4, name: "Final Sequential", description: "Finish with a sequential stage after the parallel group." },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(runDir.root, "runtime-state.json"),
+      `${JSON.stringify(
+        {
+          agentSessionIds: {},
+          completedCycles: 1,
+          completedStages: [1],
+          currentStageCycles: 0,
+          finished: false,
+          lastSummary: "S2: partial a | S3: partial b",
+          parallelStageState: {
+            "2": {
+              agentName: "worker_fast",
+              cycleIndex: 2,
+              priorSummary: "partial a",
+              scope: "parallel",
+              sessionId: "parallel-a-saved",
+              stageIndex: 2,
+              summary: "partial a",
+            },
+            "3": {
+              agentName: "worker_slow",
+              cycleIndex: 2,
+              priorSummary: "partial b",
+              scope: "parallel",
+              sessionId: "parallel-b-saved",
+              stageIndex: 3,
+              summary: "partial b",
+            },
+          },
+          pendingExchanges: [
+            {
+              agentName: "worker_fast",
+              cycleIndex: 2,
+              priorSummary: "partial a",
+              scope: "parallel",
+              sessionId: "parallel-a-saved",
+              stageIndex: 2,
+              summary: "partial a",
+            },
+            {
+              agentName: "worker_slow",
+              cycleIndex: 2,
+              priorSummary: "partial b",
+              scope: "parallel",
+              sessionId: "parallel-b-saved",
+              stageIndex: 3,
+              summary: "partial b",
+            },
+          ],
+          stageSummaries: ["setup done"],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const result = runOrchestration(
+      runDir,
+      buildParams("codex", "gpt-5.4"),
+      buildGoal("Resume mixed staged execution"),
+      projectFlags(projectDir),
+    );
+
+    expect(result.finished).toBe(true);
+    const resumes = readFileSync(resumeLog, "utf8");
+    expect(resumes).toContain("parallel-a:parallel-a-saved");
+    expect(resumes).toContain("parallel-b:parallel-b-saved");
   }, 12000);
 
   it("discards non-persisted parallel worktree changes", () => {

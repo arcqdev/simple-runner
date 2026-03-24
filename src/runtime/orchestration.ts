@@ -49,7 +49,27 @@ type RuntimeState = {
   currentStageCycles: number;
   finished: boolean;
   lastSummary: string;
+  parallelStageState: Record<string, PendingExchangeState>;
+  pendingExchanges: PendingExchangeState[];
   stageSummaries: string[];
+};
+
+type PendingExchangeState = {
+  acceptanceCriteria?: string;
+  agentName: string;
+  browserTesting?: boolean;
+  cycleIndex: number;
+  directiveTerminal?: ParsedDirective["terminal"];
+  goalText?: string;
+  priorSummary: string;
+  projectDir?: string;
+  responseIsError?: boolean;
+  responseText?: string;
+  scope: "parallel" | "single";
+  sessionId: string | null;
+  stageIndex?: number;
+  summary?: string;
+  verificationMode?: VerificationMode;
 };
 
 type GoalStage = {
@@ -225,6 +245,8 @@ function defaultState(): RuntimeState {
     currentStageCycles: 0,
     finished: false,
     lastSummary: "",
+    parallelStageState: {},
+    pendingExchanges: [],
     stageSummaries: [],
   };
 }
@@ -243,6 +265,18 @@ function loadRuntimeState(runDir: RunDir): RuntimeState {
       currentStageCycles: parsed.currentStageCycles ?? 0,
       finished: parsed.finished ?? false,
       lastSummary: parsed.lastSummary ?? "",
+      parallelStageState:
+        typeof parsed.parallelStageState === "object" &&
+        parsed.parallelStageState !== null &&
+        !Array.isArray(parsed.parallelStageState)
+          ? (parsed.parallelStageState as Record<string, PendingExchangeState>)
+          : {},
+      pendingExchanges: Array.isArray(parsed.pendingExchanges)
+        ? parsed.pendingExchanges.filter(
+            (value): value is PendingExchangeState =>
+              typeof value === "object" && value !== null && !Array.isArray(value),
+          )
+        : [],
       stageSummaries: parsed.stageSummaries ?? [],
     };
   } catch {
@@ -260,6 +294,84 @@ function persistRuntimeState(runDir: RunDir, state: RuntimeState): void {
     run_dir: runDir.root,
     state_file: filePath,
   });
+}
+
+function persistPendingExchange(
+  runDir: RunDir,
+  state: RuntimeState,
+  exchange: PendingExchangeState,
+): void {
+  if (exchange.scope === "parallel" && exchange.stageIndex !== undefined) {
+    state.parallelStageState[String(exchange.stageIndex)] = exchange;
+  }
+  const existingIndex = state.pendingExchanges.findIndex(
+    (candidate) =>
+      candidate.scope === exchange.scope &&
+      candidate.agentName === exchange.agentName &&
+      candidate.stageIndex === exchange.stageIndex,
+  );
+  if (existingIndex === -1) {
+    state.pendingExchanges.push(exchange);
+  } else {
+    state.pendingExchanges[existingIndex] = exchange;
+  }
+  persistRuntimeState(runDir, state);
+}
+
+function clearPendingExchange(
+  runDir: RunDir,
+  state: RuntimeState,
+  scope: PendingExchangeState["scope"],
+  agentName: string,
+  stageIndex?: number,
+): void {
+  state.pendingExchanges = state.pendingExchanges.filter(
+    (candidate) =>
+      !(
+        candidate.scope === scope &&
+        candidate.agentName === agentName &&
+        candidate.stageIndex === stageIndex
+      ),
+  );
+  if (scope === "parallel" && stageIndex !== undefined) {
+    delete state.parallelStageState[String(stageIndex)];
+  }
+  persistRuntimeState(runDir, state);
+}
+
+function pendingExchangeForSingle(
+  state: RuntimeState,
+  cycleIndex: number,
+  goalText: string,
+): PendingExchangeState | null {
+  return (
+    state.pendingExchanges.find(
+      (candidate) =>
+        candidate.scope === "single" &&
+        candidate.cycleIndex === cycleIndex &&
+        candidate.goalText === goalText,
+    ) ?? null
+  );
+}
+
+function pendingExchangeOutcome(exchange: PendingExchangeState): WorkerCycleOutcome | null {
+  if (exchange.responseText === undefined) {
+    return null;
+  }
+  const response: SessionQueryResult = {
+    elapsedS: 0,
+    isError: exchange.responseIsError === true,
+    text: exchange.responseText,
+  };
+  return {
+    directive: {
+      explicit: true,
+      summary: exchange.summary ?? cycleSummary(exchange.responseText),
+      terminal: exchange.directiveTerminal ?? "end_cycle",
+    },
+    response,
+    summary: exchange.summary ?? cycleSummary(exchange.responseText),
+  };
 }
 
 function expectedArtifacts(runDir: RunDir, goal: ResolvedGoal): OrchestrationArtifacts {
@@ -1165,6 +1277,11 @@ abstract class RuntimeOrchestratorBase {
       num_stages: plan?.stages.length ?? 0,
       orchestrator: this.kind,
       project_dir: flags.project,
+      resumed: state.completedCycles > 0 || state.pendingExchanges.length > 0,
+      resume_from_cycle:
+        state.completedCycles > 0 || state.pendingExchanges.length > 0
+          ? state.completedCycles + 1
+          : null,
     });
 
     const result =
@@ -1365,17 +1482,24 @@ abstract class RuntimeOrchestratorBase {
     }
 
     const sharedSummaries = [...state.stageSummaries];
-    const stageRuntimes: ParallelStageRuntime[] = group.map((stage, index) => ({
-      cyclesUsed: 0,
-      finished: false,
-      goalText: composeStageGoal(plan, stage, sharedSummaries),
-      persistReady: false,
-      priorSummary: "",
-      sessionId: null,
-      stage,
-      summary: "",
-      worker: workerAgents[index % workerAgents.length]!,
-    }));
+    const stageRuntimes: ParallelStageRuntime[] = group.map((stage, index) => {
+      const restored = state.parallelStageState[String(stage.index)];
+      const restoredWorker =
+        restored?.agentName !== undefined
+          ? workerAgents.find((candidate) => candidate.name === restored.agentName)
+          : null;
+      return {
+        cyclesUsed: 0,
+        finished: false,
+        goalText: composeStageGoal(plan, stage, sharedSummaries),
+        persistReady: false,
+        priorSummary: restored?.summary ?? "",
+        sessionId: restored?.sessionId ?? null,
+        stage,
+        summary: "",
+        worker: restoredWorker ?? workerAgents[index % workerAgents.length]!,
+      };
+    });
 
     emitLogEvent("parallel_group_start", {
       per_stage_cycles: params.maxCycles - state.completedCycles,
@@ -1424,6 +1548,20 @@ abstract class RuntimeOrchestratorBase {
 
         let combinedSummary = "";
         for (const [index, stageRuntime] of activeStages.entries()) {
+          persistPendingExchange(runDir, state, {
+            acceptanceCriteria: stageRuntime.stage.acceptance_criteria,
+            agentName: stageRuntime.worker.name,
+            browserTesting: stageRuntime.stage.browser_testing,
+            cycleIndex: state.completedCycles + groupCyclesUsed + 1,
+            goalText: stageRuntime.goalText,
+            priorSummary: stageRuntime.priorSummary,
+            projectDir: worktrees.get(stageRuntime.stage.index)?.worktreeDir ?? flags.project,
+            scope: "parallel",
+            sessionId: stageRuntime.sessionId,
+            stageIndex: stageRuntime.stage.index,
+            summary: stageRuntime.summary,
+            verificationMode: stageRuntime.stage.verification,
+          });
           const queryResult = parallelResults[index]!;
           const outcome = this.buildOutcome(queryResult);
           const stageSummary = outcome.summary;
@@ -1432,6 +1570,23 @@ abstract class RuntimeOrchestratorBase {
           stageRuntime.priorSummary = stageSummary;
           stageRuntime.summary = stageSummary;
           stageRuntime.sessionId = queryResult.sessionId;
+          persistPendingExchange(runDir, state, {
+            acceptanceCriteria: stageRuntime.stage.acceptance_criteria,
+            agentName: stageRuntime.worker.name,
+            browserTesting: stageRuntime.stage.browser_testing,
+            cycleIndex: state.completedCycles + groupCyclesUsed + 1,
+            directiveTerminal: outcome.directive.terminal,
+            goalText: stageRuntime.goalText,
+            priorSummary: stageRuntime.priorSummary,
+            projectDir: worktrees.get(stageRuntime.stage.index)?.worktreeDir ?? flags.project,
+            responseIsError: queryResult.isError,
+            responseText: queryResult.text,
+            scope: "parallel",
+            sessionId: stageRuntime.sessionId,
+            stageIndex: stageRuntime.stage.index,
+            summary: stageSummary,
+            verificationMode: stageRuntime.stage.verification,
+          });
 
           emitLogEvent("agent_run_end", {
             agent: stageRuntime.worker.name,
@@ -1484,6 +1639,13 @@ abstract class RuntimeOrchestratorBase {
           }
 
           combinedSummary += `${combinedSummary.length > 0 ? " | " : ""}S${stageRuntime.stage.index}: ${stageRuntime.summary}`;
+          clearPendingExchange(
+            runDir,
+            state,
+            "parallel",
+            stageRuntime.worker.name,
+            stageRuntime.stage.index,
+          );
         }
 
         groupCyclesUsed += 1;
@@ -1694,15 +1856,36 @@ abstract class RuntimeOrchestratorBase {
         });
 
         const worker = workerAgents[(cycleIndex - 1) % workerAgents.length];
-        const outcome = this.runWorkerCycle(
-          goalText,
-          flags.project,
-          worker,
-          priorSummary,
-          cycleIndex,
-          params.maxExchanges,
-          state,
-        );
+        const restoredPending = pendingExchangeForSingle(state, cycleIndex, goalText);
+        const outcome =
+          restoredPending !== null
+            ? pendingExchangeOutcome(restoredPending) ??
+              this.runWorkerCycle(
+                runDir,
+                goalText,
+                flags.project,
+                worker,
+                restoredPending.priorSummary,
+                cycleIndex,
+                params.maxExchanges,
+                state,
+                acceptCriteria,
+                browserTesting,
+                verificationMode,
+              )
+            : this.runWorkerCycle(
+                runDir,
+                goalText,
+                flags.project,
+                worker,
+                priorSummary,
+                cycleIndex,
+                params.maxExchanges,
+                state,
+                acceptCriteria,
+                browserTesting,
+                verificationMode,
+              );
 
         let finished = false;
         let summary = outcome.summary;
@@ -1773,6 +1956,7 @@ abstract class RuntimeOrchestratorBase {
         state.completedCycles = cycleIndex;
         state.lastSummary = summary;
         priorSummary = summary;
+        clearPendingExchange(runDir, state, "single", worker.name);
         persistRuntimeState(runDir, state);
 
         if (finished) {
@@ -1799,6 +1983,7 @@ abstract class RuntimeOrchestratorBase {
   }
 
   protected runWorkerCycle(
+    runDir: RunDir,
     goalText: string,
     projectDir: string,
     worker: RuntimeAgent,
@@ -1806,8 +1991,23 @@ abstract class RuntimeOrchestratorBase {
     cycleIndex: number,
     maxExchanges: number,
     state: RuntimeState,
+    acceptanceCriteria?: string,
+    browserTesting?: boolean,
+    verificationMode?: VerificationMode,
   ): WorkerCycleOutcome {
     const prompt = buildWorkerPrompt(goalText, projectDir, priorSummary, worker, cycleIndex);
+    persistPendingExchange(runDir, state, {
+      acceptanceCriteria,
+      agentName: worker.name,
+      browserTesting,
+      cycleIndex,
+      goalText,
+      priorSummary,
+      projectDir,
+      scope: "single",
+      sessionId: worker.session.sessionId,
+      verificationMode,
+    });
     emitLogEvent("agent_run_start", {
       agent: worker.name,
       model: worker.session.model,
@@ -1820,6 +2020,22 @@ abstract class RuntimeOrchestratorBase {
     });
 
     const outcome = this.queryWorker(worker, prompt, projectDir, cycleIndex, maxExchanges);
+    persistPendingExchange(runDir, state, {
+      acceptanceCriteria,
+      agentName: worker.name,
+      browserTesting,
+      cycleIndex,
+      directiveTerminal: outcome.directive.terminal,
+      goalText,
+      priorSummary,
+      projectDir,
+      responseIsError: outcome.response.isError,
+      responseText: outcome.response.text,
+      scope: "single",
+      sessionId: worker.session.sessionId,
+      summary: outcome.summary,
+      verificationMode,
+    });
 
     emitLogEvent("orchestrator_tool_result", {
       agent: worker.name,

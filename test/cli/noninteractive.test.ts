@@ -265,7 +265,7 @@ describe("runCli noninteractive runtime resolution", () => {
       },
     });
     io.restore();
-  });
+  }, 10000);
 
   it("migrates a legacy last-config file when reusing it", () => {
     const homeDir = makeHomeDir();

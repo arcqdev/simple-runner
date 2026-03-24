@@ -30,6 +30,12 @@ function writeEvents(
   );
 }
 
+function writeRuntimeState(homeDir: string, runId: string, state: Record<string, unknown>): void {
+  const runDir = path.join(homeDir, ".kodo", "runs", runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(path.join(runDir, "runtime-state.json"), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -197,5 +203,37 @@ describe("listRuns", () => {
     const runs = findIncompleteRuns(mine);
     expect(runs).toHaveLength(1);
     expect(runs[0]?.goal).toBe("my goal");
+  });
+
+  it("hydrates richer resume state from runtime-state.json when present", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    mkdirSync(project, { recursive: true });
+
+    writeEvents(homeDir, "resume_rich", "log.jsonl", [
+      {
+        event: "run_start",
+        goal: "resume me",
+        orchestrator: "codex",
+        model: "gpt-5.4",
+        project_dir: project,
+        max_exchanges: 30,
+        max_cycles: 5,
+        team: [],
+      },
+      { event: "cli_args", team: "full" },
+      { event: "cycle_end", summary: "cycle one" },
+    ]);
+    writeRuntimeState(homeDir, "resume_rich", {
+      pendingExchanges: [{ agentName: "worker_fast", scope: "single" }],
+      parallelStageState: {
+        "2": { agentName: "worker_fast", stageIndex: 2, sessionId: "saved-thread" },
+      },
+    });
+
+    const run = listRuns(project)[0];
+    expect(run?.pendingExchanges).toHaveLength(1);
+    expect(run?.parallelStageState["2"]?.sessionId).toBe("saved-thread");
   });
 });

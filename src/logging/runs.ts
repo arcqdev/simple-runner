@@ -19,6 +19,8 @@ export type RunState = {
   maxCycles: number;
   model: string;
   orchestrator: string;
+  pendingExchanges: Array<Record<string, unknown>>;
+  parallelStageState: Record<string, Record<string, unknown>>;
   projectDir: string;
   runId: string;
   stageSummaries: string[];
@@ -83,6 +85,8 @@ export function parseRun(logFile: string): RunState | null {
   let currentStageIndex: number | null = null;
   let pendingSessionId: string | null = null;
   const agentSessionIds: Record<string, string> = {};
+  let pendingExchanges: Array<Record<string, unknown>> = [];
+  let parallelStageState: Record<string, Record<string, unknown>> = {};
   const sessionIdsByName: Record<string, string> = {};
   const stageSummaries: string[] = [];
   const genericSessionNames = new Set(["claude", "codex", "cursor", "gemini-cli"]);
@@ -154,6 +158,37 @@ export function parseRun(logFile: string): RunState | null {
     }
   }
 
+  try {
+    const runtimeStateFile = path.join(path.dirname(logFile), "runtime-state.json");
+    if (existsSync(runtimeStateFile)) {
+      const parsed = JSON.parse(readFileSync(runtimeStateFile, "utf8")) as Record<string, unknown>;
+      if (Array.isArray(parsed.pendingExchanges)) {
+        pendingExchanges = parsed.pendingExchanges.filter(
+          (value): value is Record<string, unknown> =>
+            typeof value === "object" && value !== null && !Array.isArray(value),
+        );
+      }
+      const rawParallel =
+        typeof parsed.parallelStageState === "object" &&
+        parsed.parallelStageState !== null &&
+        !Array.isArray(parsed.parallelStageState)
+          ? (parsed.parallelStageState as Record<string, unknown>)
+          : null;
+      if (rawParallel !== null) {
+        parallelStageState = Object.fromEntries(
+          Object.entries(rawParallel).flatMap(([key, value]) =>
+            typeof value === "object" && value !== null && !Array.isArray(value)
+              ? [[key, value as Record<string, unknown>]]
+              : [],
+          ),
+        );
+      }
+    }
+  } catch {
+    pendingExchanges = [];
+    parallelStageState = {};
+  }
+
   if (cliArgs === null) {
     return null;
   }
@@ -182,6 +217,8 @@ export function parseRun(logFile: string): RunState | null {
       stringField(runStart, "model") ?? stringField(cliArgs, "orchestrator_model") ?? "unknown",
     orchestrator:
       stringField(runStart, "orchestrator") ?? stringField(cliArgs, "orchestrator") ?? "unknown",
+    pendingExchanges,
+    parallelStageState,
     projectDir: stringField(runStart, "project_dir") ?? stringField(cliArgs, "project_dir") ?? "",
     runId: extractRunId(logFile),
     stageSummaries,

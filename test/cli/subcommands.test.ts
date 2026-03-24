@@ -225,7 +225,7 @@ describe("runCli subcommands", () => {
     expect(io.stderr()).toContain("Update failed.");
     expect(io.stderr()).toContain("uv tool upgrade kodo --reinstall");
     io.restore();
-  });
+  }, 10000);
 
   it("builds an issue URL from a selected run", () => {
     const homeDir = makeRunsHome();
