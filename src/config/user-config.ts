@@ -7,7 +7,7 @@ type UserConfig = Record<string, unknown>;
 const cache = new Map<string, UserConfig>();
 
 function configPath(homeDir: string): string {
-  return path.join(homeDir, ".kodo", "config.json");
+  return path.join(homeDir, ".simple-runner", "config.json");
 }
 
 export function loadUserConfig(homeDir = os.homedir()): UserConfig {

@@ -284,16 +284,12 @@ function checkAcpBackendStatus(backend: BackendKey): BackendStatus {
     jsonrpc: "2.0",
     method: "initialize",
     params: {
-      clientName: "kodo-preflight",
-      clientVersion: "0",
       protocolVersion: ACP_PROTOCOL_VERSION,
-      requestedCapabilities: {
-        initialize: true,
-        prompt: true,
-        resume: true,
-        sessionLifecycle: true,
-        streaming: true,
-        usage: true,
+      clientCapabilities: {
+        fs: {
+          readTextFile: false,
+          writeTextFile: false,
+        },
       },
     },
   };
@@ -335,16 +331,20 @@ function checkAcpBackendStatus(backend: BackendKey): BackendStatus {
         ? (initResponse.result as Record<string, unknown>)
         : null;
     const capabilities =
-      typeof initResult?.capabilities === "object" && initResult.capabilities !== null
-        ? (initResult.capabilities as Record<string, unknown>)
+      typeof initResult?.agentCapabilities === "object" && initResult.agentCapabilities !== null
+        ? (initResult.agentCapabilities as Record<string, unknown>)
+        : null;
+    const agentInfo =
+      typeof initResult?.agentInfo === "object" && initResult.agentInfo !== null
+        ? (initResult.agentInfo as Record<string, unknown>)
         : null;
     const serverName =
-      typeof capabilities?.serverName === "string" && capabilities.serverName.length > 0
-        ? capabilities.serverName
+      typeof agentInfo?.name === "string" && agentInfo.name.length > 0
+        ? agentInfo.name
         : acpProfile.transport.command;
     const serverVersion =
-      typeof capabilities?.serverVersion === "string" && capabilities.serverVersion.length > 0
-        ? capabilities.serverVersion
+      typeof agentInfo?.version === "string" && agentInfo.version.length > 0
+        ? agentInfo.version
         : null;
     const version =
       serverVersion === null ? `${serverName} (ACP ready)` : `${serverName} ${serverVersion}`;

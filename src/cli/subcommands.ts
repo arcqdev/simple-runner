@@ -852,7 +852,7 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
     ...(archivePath === null
       ? []
       : [
-          `**[TODO] Please attach the run archive:** drag and drop \`run.tar.gz\` from the folder that opened (or from \`~/.kodo/runs/${selected.runId}/\`) into this issue. The archive contains log, config, goal, and conversations essential for debugging.`,
+          `**[TODO] Please attach the run archive:** drag and drop \`run.tar.gz\` from the folder that opened (or from \`~/.simple-runner/runs/${selected.runId}/\`) into this issue. The archive contains log, config, goal, and conversations essential for debugging.`,
           "",
           "The archive is scrubbed for common secrets and PII, but still verify it manually before submitting.",
         ]),

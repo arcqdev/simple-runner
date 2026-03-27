@@ -35,7 +35,7 @@ export function writeRunStatus(
   }
   lines.push(`- Updated: ${formatTime(0)}`);
 
-  const statusFile = path.join(projectDir, ".kodo", "run-status.md");
+  const statusFile = path.join(projectDir, ".simple-runner", "run-status.md");
   mkdirSync(path.dirname(statusFile), { recursive: true });
   const content = `${lines.join("\n")}\n`;
   writeFileSync(statusFile, content, "utf8");
@@ -43,7 +43,7 @@ export function writeRunStatus(
 }
 
 export function readRunStatus(projectDir: string): string {
-  const statusFile = path.join(projectDir, ".kodo", "run-status.md");
+  const statusFile = path.join(projectDir, ".simple-runner", "run-status.md");
   try {
     return readFileSync(statusFile, "utf8");
   } catch {

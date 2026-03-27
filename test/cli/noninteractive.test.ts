@@ -168,6 +168,18 @@ describe("runCli noninteractive runtime resolution", () => {
     io.restore();
   });
 
+  it("treats a direct API model selection as the API orchestrator when credentials exist", () => {
+    const homeDir = makeHomeDir();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    vi.stubEnv("GEMINI_API_KEY", "test-key");
+    const project = makeProjectDir();
+    const io = captureOutput();
+
+    expect(runCli(["--goal", "Ship it", "--project", project, "--orchestrator", "gemini-flash"])).toBe(0);
+    expect(io.stdout()).toContain("Orchestrator: api (gemini-flash)");
+    io.restore();
+  });
+
   it("reuses the previous project config for interactive runs", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);

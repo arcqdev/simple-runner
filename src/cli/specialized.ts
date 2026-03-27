@@ -340,7 +340,7 @@ export function buildTestFallbackPlan(
       ? `\n\n**Target scope:** ${options.targets.map((target) => `\`${target}\``).join(", ")} — focus testing on these files/directories.`
       : "";
   const reconPath = path.join(runDir, "test-recon.md");
-  const coverageFile = ".kodo/test-coverage.md";
+  const coverageFile = ".simple-runner/test-coverage.md";
   const findingsWorkflows = path.join(runDir, "findings-workflows.md");
   const findingsEdgeCases = path.join(runDir, "findings-edge-cases.md");
 

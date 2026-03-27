@@ -13,6 +13,7 @@ import {
   loadTeamConfigFile,
   TEAM_BACKEND_MAP,
 } from "../config/team-config.js";
+import { resolveApiModel } from "../config/models.js";
 import { emit as emitLogEvent, type RunDir } from "../logging/log.js";
 import { availableBackends } from "./backends.js";
 import {
@@ -163,6 +164,34 @@ type FollowUpStageSpec = {
   key: string;
   name: string;
   requiresMissingPath?: string;
+};
+
+type JsonRequest = {
+  body?: string;
+  headers?: Record<string, string>;
+  method: string;
+  timeoutMs?: number;
+  url: string;
+};
+
+type JsonResponse = {
+  ok: boolean;
+  status: number;
+  text: string;
+};
+
+type ApiAdvisorDeps = {
+  env?: NodeJS.ProcessEnv;
+  requestJson?: (request: JsonRequest, env: NodeJS.ProcessEnv) => JsonResponse;
+};
+
+type StageAdvisor = {
+  assess: (
+    goal: string,
+    completedSummaries: string[],
+    completedStages: number[],
+    projectDir: string,
+  ) => AdvisorDecision;
 };
 
 type ParallelStageRuntime = {
@@ -553,6 +582,354 @@ function parseFollowUpSpec(summary: string): FollowUpStageSpec | null {
     }
   }
   return null;
+}
+
+function probeGeminiApiKey(env: NodeJS.ProcessEnv): string | null {
+  const geminiKey = env.GEMINI_API_KEY?.trim();
+  if (geminiKey) {
+    return geminiKey;
+  }
+  const googleKey = env.GOOGLE_API_KEY?.trim();
+  return googleKey && googleKey.length > 0 ? googleKey : null;
+}
+
+function defaultRequestJson(request: JsonRequest, env: NodeJS.ProcessEnv): JsonResponse {
+  const script = `
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    try {
+      const response = await fetch(payload.url, {
+        method: payload.method,
+        headers: payload.headers,
+        body: payload.body,
+        signal: AbortSignal.timeout(payload.timeoutMs ?? 30000),
+      });
+      const text = await response.text();
+      process.stdout.write(JSON.stringify({ ok: response.ok, status: response.status, text }));
+    } catch (error) {
+      process.stderr.write(error instanceof Error ? (error.stack ?? error.message) : String(error));
+      process.exit(1);
+    }
+  `;
+
+  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    encoding: "utf8",
+    env: { ...env },
+    input: JSON.stringify(request),
+    timeout: request.timeoutMs ?? 30000,
+  });
+
+  if (child.status !== 0) {
+    throw new Error((child.stderr || child.stdout || "request failed").trim());
+  }
+
+  return JSON.parse(child.stdout.trim()) as JsonResponse;
+}
+
+function normalizeStageIndexes(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value
+        .filter((entry): entry is number => typeof entry === "number" && Number.isInteger(entry))
+        .map((entry) => entry)
+    : [];
+}
+
+function candidateGroupsForAdvisor(
+  plan: GoalPlan,
+  completedSummaries: string[],
+  completedStages: number[],
+  projectDir: string,
+  seenFollowUps: Set<string>,
+  followUpQueue: FollowUpStageSpec[],
+  nextDynamicIndex: { current: number },
+): GoalStage[][] {
+  const pendingBaseGroups = executionGroups(
+    plan.stages.filter((stage) => !completedStages.includes(stage.index)),
+  );
+
+  for (const summary of completedSummaries) {
+    const followUp = parseFollowUpSpec(summary);
+    if (followUp === null || seenFollowUps.has(followUp.key)) {
+      continue;
+    }
+    if (followUp.requiresMissingPath !== undefined) {
+      const filePath = path.join(projectDir, followUp.requiresMissingPath);
+      if (existsSync(filePath)) {
+        seenFollowUps.add(followUp.key);
+        continue;
+      }
+    }
+    seenFollowUps.add(followUp.key);
+    followUpQueue.push(followUp);
+  }
+
+  const nextFollowUp = followUpQueue[0];
+  if (nextFollowUp !== undefined) {
+    const stage: GoalStage = {
+      acceptance_criteria: nextFollowUp.acceptanceCriteria,
+      description: nextFollowUp.description,
+      index: nextDynamicIndex.current,
+      name: nextFollowUp.name,
+    };
+    return [...pendingBaseGroups, [stage]];
+  }
+
+  return pendingBaseGroups;
+}
+
+function buildApiAdvisorPrompt(
+  goal: string,
+  completedSummaries: string[],
+  candidateGroups: GoalStage[][],
+): string {
+  const lines = [
+    "You are the orchestration controller for a coding run.",
+    "You have exactly one tool: implement_goal.",
+    "Call implement_goal with the stageIndexes for exactly one candidate group to run next.",
+    "If the goal is already complete and no more work should run, reply with plain text starting with ADVISOR_DONE: followed by a short summary.",
+    "Do not invent stage indexes. Only use the provided candidate groups.",
+    "",
+    `Goal: ${goal}`,
+    "",
+    "Completed stage summaries:",
+    completedSummaries.length === 0 ? "- none" : completedSummaries.map((summary, index) => `- ${index + 1}: ${summary}`).join("\n"),
+    "",
+    "Candidate groups:",
+    ...candidateGroups.map((group, index) => {
+      const stages = group
+        .map(
+          (stage) =>
+            `stage ${stage.index}: ${stage.name}${stage.acceptance_criteria ? ` [acceptance: ${stage.acceptance_criteria}]` : ""}`,
+        )
+        .join(" | ");
+      return `- group ${index + 1}: ${stages}`;
+    }),
+  ];
+
+  return lines.join("\n");
+}
+
+export class ApiToolStageAdvisor implements StageAdvisor {
+  readonly #basePlan: GoalPlan;
+  readonly #deps: Required<ApiAdvisorDeps>;
+  readonly #model: string;
+  readonly #followUpQueue: FollowUpStageSpec[] = [];
+  readonly #seenFollowUps = new Set<string>();
+  #nextDynamicIndex: number;
+
+  constructor(plan: GoalPlan, model: string, deps: ApiAdvisorDeps = {}) {
+    this.#basePlan = plan;
+    this.#model = model;
+    this.#nextDynamicIndex = plan.stages.length + 1;
+    this.#deps = {
+      env: deps.env ?? process.env,
+      requestJson: deps.requestJson ?? defaultRequestJson,
+    };
+  }
+
+  assess(
+    goal: string,
+    completedSummaries: string[],
+    completedStages: number[],
+    projectDir: string,
+  ): AdvisorDecision {
+    emitLogEvent("advisor_assess_start", {
+      completed_stages: completedStages.length,
+      planned_stages: this.#basePlan.stages.length,
+    });
+
+    const latestSummary = completedSummaries.at(-1)?.trim() ?? "";
+    if (/^ADVISOR_DONE:/imu.test(latestSummary)) {
+      const summary = latestSummary.replace(/^ADVISOR_DONE:\s*/imu, "").trim() || goal;
+      emitLogEvent("advisor_assess_end", {
+        action: "done",
+        reasoning: "Completed summaries indicate the goal is already complete.",
+      });
+      return {
+        action: "done",
+        reasoning: "Completed summaries indicate the goal is already complete.",
+        summary,
+      };
+    }
+
+    const nextDynamicIndex = { current: this.#nextDynamicIndex };
+    const candidateGroups = candidateGroupsForAdvisor(
+      this.#basePlan,
+      completedSummaries,
+      completedStages,
+      projectDir,
+      this.#seenFollowUps,
+      this.#followUpQueue,
+      nextDynamicIndex,
+    );
+
+    if (candidateGroups.length === 0) {
+      emitLogEvent("advisor_assess_end", {
+        action: "done",
+        reasoning: "No remaining planned stages or discovered follow-up work.",
+      });
+      return {
+        action: "done",
+        reasoning: "No remaining planned stages or discovered follow-up work.",
+        summary: latestSummary || `Completed adaptive execution for: ${goal}`,
+      };
+    }
+
+    const resolved = resolveApiModel(this.#model);
+    const apiKey =
+      resolved?.providerName === "Google" ? probeGeminiApiKey(this.#deps.env) : null;
+
+    if (resolved === null || resolved.providerName !== "Google" || apiKey === null) {
+      const group = candidateGroups[0] ?? [];
+      emitLogEvent("advisor_assess_end", {
+        action: "run_group",
+        reasoning: "API advisor unavailable; using the next candidate group.",
+        stages: group.map((stage) => stage.index),
+      });
+      return {
+        action: "run_group",
+        group,
+        reasoning: "API advisor unavailable; using the next candidate group.",
+      };
+    }
+
+    try {
+      const response = this.#deps.requestJson(
+        {
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: buildApiAdvisorPrompt(goal, completedSummaries, candidateGroups) }] }],
+            generationConfig: { temperature: 0 },
+            tools: [
+              {
+                functionDeclarations: [
+                  {
+                    description: "Select the next candidate stage group to execute.",
+                    name: "implement_goal",
+                    parameters: {
+                      properties: {
+                        reasoning: { type: "STRING" },
+                        stageIndexes: {
+                          items: { type: "INTEGER" },
+                          type: "ARRAY",
+                        },
+                      },
+                      required: ["stageIndexes"],
+                      type: "OBJECT",
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          method: "POST",
+          timeoutMs: 30000,
+          url: `https://generativelanguage.googleapis.com/v1beta/models/${resolved.fullModelId}:generateContent`,
+        },
+        this.#deps.env,
+      );
+
+      if (!response.ok) {
+        throw new Error(`gemini api advisor returned HTTP ${response.status}`);
+      }
+
+      const payload = JSON.parse(response.text) as {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{
+              functionCall?: {
+                args?: Record<string, unknown>;
+                name?: unknown;
+              };
+              text?: unknown;
+            }>;
+          };
+        }>;
+      };
+
+      const parts = payload.candidates?.[0]?.content?.parts ?? [];
+      for (const part of parts) {
+        const text = typeof part.text === "string" ? part.text.trim() : "";
+        if (text.startsWith("ADVISOR_DONE:")) {
+          const summary = text.replace(/^ADVISOR_DONE:\s*/u, "").trim() || goal;
+          emitLogEvent("advisor_assess_end", {
+            action: "done",
+            reasoning: "API advisor marked the goal complete.",
+          });
+          return {
+            action: "done",
+            reasoning: "API advisor marked the goal complete.",
+            summary,
+          };
+        }
+
+        const call = part.functionCall;
+        if (call?.name !== "implement_goal") {
+          continue;
+        }
+        const stageIndexes = normalizeStageIndexes(call.args?.stageIndexes);
+        const selected =
+          candidateGroups.find((group) => {
+            const indexes = group.map((stage) => stage.index);
+            return (
+              indexes.length === stageIndexes.length &&
+              indexes.every((index) => stageIndexes.includes(index))
+            );
+          }) ?? null;
+
+        if (selected !== null) {
+          const queuedFollowUp = this.#followUpQueue[0];
+          if (
+            queuedFollowUp !== undefined &&
+            selected.length === 1 &&
+            selected[0]?.index === this.#nextDynamicIndex
+          ) {
+            this.#followUpQueue.shift();
+            this.#nextDynamicIndex += 1;
+          }
+          emitLogEvent("advisor_assess_end", {
+            action: "run_group",
+            reasoning: "API advisor selected the next stage group.",
+            stages: selected.map((stage) => stage.index),
+          });
+          return {
+            action: "run_group",
+            group: selected,
+            reasoning: "API advisor selected the next stage group.",
+          };
+        }
+      }
+    } catch (error) {
+      emitLogEvent("orchestrator_fallback", {
+        orchestrator: "api",
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const group = candidateGroups[0] ?? [];
+    if (
+      this.#followUpQueue[0] !== undefined &&
+      group.length === 1 &&
+      group[0]?.index === this.#nextDynamicIndex
+    ) {
+      this.#followUpQueue.shift();
+      this.#nextDynamicIndex += 1;
+    }
+    emitLogEvent("advisor_assess_end", {
+      action: "run_group",
+      reasoning: "API advisor fallback selected the next candidate group.",
+      stages: group.map((stage) => stage.index),
+    });
+    return {
+      action: "run_group",
+      group,
+      reasoning: "API advisor fallback selected the next candidate group.",
+    };
+  }
 }
 
 class LocalAdaptiveStageAdvisor {
@@ -1393,7 +1770,7 @@ abstract class RuntimeOrchestratorBase {
     });
 
     let summary = state.lastSummary;
-    const advisor = new LocalAdaptiveStageAdvisor(plan);
+    const advisor = this.createStageAdvisor(plan);
 
     while (state.completedCycles < params.maxCycles) {
       const decision = advisor.assess(
@@ -1442,6 +1819,10 @@ abstract class RuntimeOrchestratorBase {
       message: "Run paused after reaching the cycle limit.",
       summary,
     };
+  }
+
+  protected createStageAdvisor(plan: GoalPlan): StageAdvisor {
+    return new LocalAdaptiveStageAdvisor(plan);
   }
 
   protected runSequentialStage(
@@ -2212,6 +2593,10 @@ abstract class CliRuntimeOrchestratorBase extends RuntimeOrchestratorBase {
 export class ApiRuntimeOrchestrator extends RuntimeOrchestratorBase {
   constructor(model: string) {
     super("api", model);
+  }
+
+  protected override createStageAdvisor(plan: GoalPlan): StageAdvisor {
+    return new ApiToolStageAdvisor(plan, this.model);
   }
 }
 

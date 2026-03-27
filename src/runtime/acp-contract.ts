@@ -9,7 +9,7 @@ import type { JsonObject } from "./json.js";
  * this module so transport/session semantics stay consistent.
  */
 
-export const ACP_PROTOCOL_VERSION = "0.1";
+export const ACP_PROTOCOL_VERSION = 1;
 
 export type AcpTransportKind = "stdio";
 export type AcpBackendKind = "gemini" | "opencode";
@@ -46,15 +46,16 @@ export type AcpNegotiatedCapabilities = AcpTransportCapabilities & {
 };
 
 export type AcpInitializeRequest = {
-  protocolVersion: string;
-  clientName: string;
-  clientVersion: string;
-  requestedCapabilities: AcpTransportCapabilities;
+  protocolVersion: number;
+  clientCapabilities?: JsonObject;
 };
 
 export type AcpInitializeResult = {
-  capabilities: AcpNegotiatedCapabilities;
+  agentCapabilities?: JsonObject | null;
+  agentInfo?: JsonObject | null;
+  authMethods?: JsonObject[] | null;
   instructions?: string | null;
+  protocolVersion: number;
 };
 
 export type AcpBackendProfile = {
@@ -233,7 +234,7 @@ export const ACP_BACKEND_PROFILES: Record<AcpBackendKind, AcpBackendProfile> = {
     transport: {
       kind: "stdio",
       command: "gemini",
-      args: ["acp"],
+      args: ["--acp"],
     },
     notes: [
       "Primary ACP backend for Gemini-native execution.",
@@ -250,11 +251,11 @@ export const ACP_BACKEND_PROFILES: Record<AcpBackendKind, AcpBackendProfile> = {
     transport: {
       kind: "stdio",
       command: "opencode",
-      args: ["acp", "--provider", "gemini"],
+      args: ["acp"],
     },
     notes: [
       "OpenCode is a separate ACP backend kind, not just an alias, because its server process and event framing are expected to differ from Gemini's native server.",
-      "OpenCode should inherit Gemini credentials and default to Gemini provider/model settings unless an explicit OpenCode profile is added later.",
+      "OpenCode ACP does not accept a --provider flag; provider/model are resolved from opencode.json config and the model field in session requests.",
     ],
   },
 };

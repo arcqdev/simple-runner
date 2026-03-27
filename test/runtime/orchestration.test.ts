@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../../src/cli/runtime.js";
 import { RunDir, init } from "../../src/logging/log.js";
 import {
+  ApiToolStageAdvisor,
   ApiRuntimeOrchestrator,
   buildRuntimeOrchestrator,
   GeminiCliRuntimeOrchestrator,
@@ -26,6 +27,13 @@ function makeTempDir(prefix: string): string {
   );
   mkdirSync(directory, { recursive: true });
   return directory;
+}
+
+function initTempRun(prefix: string): RunDir {
+  const projectDir = makeTempDir(prefix);
+  const runDir = RunDir.create(projectDir, prefix);
+  init(runDir);
+  return runDir;
 }
 
 function projectFlags(projectDir: string): {
@@ -156,5 +164,87 @@ describe("ACP orchestration", () => {
     expect(result.finished).toBe(true);
     expect(result.summary).toContain("codex");
     expect(readFileSync(runDir.logFile, "utf8")).toContain('"event":"orchestrator_fallback"');
+  });
+});
+
+describe("API tool advisor", () => {
+  it("selects the stage group returned by the implement_goal tool call", () => {
+    initTempRun("api_tool_select");
+    const advisor = new ApiToolStageAdvisor(
+      {
+        context: "Test plan",
+        stages: [
+          { description: "First", index: 1, name: "Stage 1" },
+          { description: "Second", index: 2, name: "Stage 2" },
+        ],
+      },
+      "gemini-flash",
+      {
+        env: { ...process.env, GEMINI_API_KEY: "test-key" },
+        requestJson: () => ({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: {
+                        args: { reasoning: "Stage 2 is next", stageIndexes: [2] },
+                        name: "implement_goal",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        }),
+      },
+    );
+
+    const decision = advisor.assess("Ship it", ["Completed stage 1"], [1], makeTempDir("project"));
+
+    expect(decision.action).toBe("run_group");
+    if (decision.action === "run_group") {
+      expect(decision.group.map((stage) => stage.index)).toEqual([2]);
+      expect(decision.reasoning).toContain("API advisor selected");
+    }
+  });
+
+  it("marks the goal done when the API advisor returns ADVISOR_DONE text", () => {
+    initTempRun("api_tool_done");
+    const advisor = new ApiToolStageAdvisor(
+      {
+        context: "Test plan",
+        stages: [{ description: "First", index: 1, name: "Stage 1" }],
+      },
+      "gemini-flash",
+      {
+        env: { ...process.env, GEMINI_API_KEY: "test-key" },
+        requestJson: () => ({
+          ok: true,
+          status: 200,
+          text: JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: "ADVISOR_DONE: all stages are complete" }],
+                },
+              },
+            ],
+          }),
+        }),
+      },
+    );
+
+    const decision = advisor.assess("Ship it", [], [], makeTempDir("project"));
+
+    expect(decision).toEqual({
+      action: "done",
+      reasoning: "API advisor marked the goal complete.",
+      summary: "all stages are complete",
+    });
   });
 });

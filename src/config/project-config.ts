@@ -6,7 +6,7 @@ import { CliError } from "../core/errors.js";
 export type ProjectConfig = Record<string, unknown>;
 
 export function projectConfigPath(projectDir: string): string {
-  return path.join(projectDir, ".kodo", "config.json");
+  return path.join(projectDir, ".simple-runner", "config.json");
 }
 
 export function saveProjectConfig(projectDir: string, config: ProjectConfig): void {
@@ -22,7 +22,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
 
 export function loadProjectConfig(projectDir: string): ProjectConfig | null {
   const primary = projectConfigPath(projectDir);
-  const legacy = path.join(projectDir, ".kodo", "last-config.json");
+  const legacy = path.join(projectDir, ".simple-runner", "last-config.json");
 
   for (const filePath of [primary, legacy]) {
     try {

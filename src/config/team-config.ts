@@ -95,13 +95,13 @@ const ROLE_PROMPTS: Record<string, string> = {
 };
 
 export function teamsDir(homeDir = os.homedir()): string {
-  const result = path.join(homeDir, ".kodo", "teams");
+  const result = path.join(homeDir, ".simple-runner", "teams");
   mkdirSync(result, { recursive: true });
   return result;
 }
 
 export function projectTeamConfigPath(projectDir: string): string {
-  return path.join(projectDir, ".kodo", "team.json");
+  return path.join(projectDir, ".simple-runner", "team.json");
 }
 
 function deepClone<T>(value: T): T {

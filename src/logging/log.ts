@@ -50,7 +50,7 @@ let startTime = 0;
 
 function runsRoot(homeDir = os.homedir()): string {
   const override = process.env.KODO_RUNS_DIR;
-  const root = override ? path.resolve(override) : path.join(homeDir, ".kodo", "runs");
+  const root = override ? path.resolve(override) : path.join(homeDir, ".simple-runner", "runs");
   mkdirSync(root, { recursive: true });
   return root;
 }

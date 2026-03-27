@@ -61,7 +61,7 @@ function safeReadTrimmed(filePath: string): string | null {
 }
 
 function intakeStoreDir(projectDir: string): string {
-  return path.join(projectDir, ".kodo", "intake");
+  return path.join(projectDir, ".simple-runner", "intake");
 }
 
 function intakeGoalFile(projectDir: string): string {

@@ -27,6 +27,13 @@ type Provider = {
   prefix: string;
 };
 
+export type ResolvedApiModel = {
+  envVars: readonly string[];
+  fullModelId: string;
+  providerName: string;
+  providerPrefix: string;
+};
+
 const PROVIDER_REGISTRY: readonly Provider[] = [
   {
     envVars: ["ANTHROPIC_API_KEY"],
@@ -197,6 +204,38 @@ function providerForModel(model: string): Provider | null {
       return provider;
     }
   }
+  return null;
+}
+
+export function resolveApiModel(model: string): ResolvedApiModel | null {
+  const provider = providerForModel(model);
+  if (provider === null) {
+    return null;
+  }
+
+  const exact =
+    provider.models.find(
+      (candidate) => candidate.alias === model || candidate.fullModelId === model,
+    ) ?? null;
+
+  if (exact !== null) {
+    return {
+      envVars: provider.envVars,
+      fullModelId: exact.fullModelId,
+      providerName: provider.name,
+      providerPrefix: provider.prefix,
+    };
+  }
+
+  if (model.startsWith(`${provider.prefix}:`)) {
+    return {
+      envVars: provider.envVars,
+      fullModelId: model.slice(provider.prefix.length + 1),
+      providerName: provider.name,
+      providerPrefix: provider.prefix,
+    };
+  }
+
   return null;
 }
 

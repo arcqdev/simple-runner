@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import process from "node:process";
 
-const ACP_PROTOCOL_VERSION = "0.1";
+const ACP_PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_S = 7200;
 const EVENT_TIMEOUT_MS = 30_000;
 const STARTUP_TIMEOUT_MS = 5_000;
@@ -86,6 +86,9 @@ function stringifyUnknown(value) {
 function buildWorkerEnv() {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
+  if (env.GEMINI_API_KEY && env.GOOGLE_API_KEY) {
+    delete env.GOOGLE_API_KEY;
+  }
   return env;
 }
 
@@ -95,6 +98,7 @@ function parseLocator(value) {
     return null;
   }
   const conversationId =
+    stringField(record, "sessionId") ??
     stringField(record, "conversationId") ??
     stringField(record, "conversation_id") ??
     stringField(record, "id");
@@ -208,13 +212,13 @@ function acpProfiles(payload) {
         ? {
             backend: "opencode",
             command: "opencode",
-            args: ["acp", "--provider", "gemini"],
+            args: ["acp"],
             costBucket: "gemini_api",
           }
         : {
             backend: "gemini",
             command: "gemini",
-            args: ["acp"],
+            args: ["--acp"],
             costBucket: "gemini_api",
           },
     provider: "gemini",
@@ -228,8 +232,10 @@ function requestFailureCode(method) {
     case "initialize":
       return "initialize_failed";
     case "session.create":
+    case "session/new":
       return "session_create_failed";
     case "session.resume":
+    case "session/load":
       return "session_resume_failed";
     default:
       return "prompt_failed";
@@ -535,6 +541,83 @@ function normalizeAcpEvent(backend, envelope) {
 
   if (backend === "opencode") {
     switch (method) {
+      case "session/update": {
+        const update = toRecord(params.update);
+        const updateType = stringField(update, "sessionUpdate");
+        if (update === null || updateType === null) {
+          return invalidNormalized(envelope, "OpenCode session/update payload was malformed.");
+        }
+        switch (updateType) {
+          case "agent_message_chunk": {
+            const content = toRecord(update.content);
+            const delta = stringField(content, "text");
+            return delta === null
+              ? invalidNormalized(envelope, "OpenCode agent_message_chunk payload was malformed.")
+              : { ok: true, value: { event: { delta, type: "message.delta" }, raw: envelope } };
+          }
+          case "agent_thought_chunk":
+            return {
+              ok: true,
+              value: {
+                event: { code: "ignored_event", message: "Ignored: agent_thought_chunk", type: "warning" },
+                raw: envelope,
+              },
+            };
+          case "tool_call": {
+            const toolName = stringField(update, "title") ?? stringField(update, "kind") ?? "unknown";
+            return {
+              ok: true,
+              value: {
+                event: { input: toRecord(update.rawInput), toolName, type: "tool.call" },
+                raw: envelope,
+              },
+            };
+          }
+          case "tool_call_update": {
+            const status = stringField(update, "status");
+            if (status === "completed" || status === "error") {
+              const toolName = stringField(update, "title") ?? stringField(update, "kind") ?? "unknown";
+              return {
+                ok: true,
+                value: {
+                  event: {
+                    isError: status === "error",
+                    output: toRecord(update.result) ?? toRecord(update.output),
+                    toolName,
+                    type: "tool.result",
+                  },
+                  raw: envelope,
+                },
+              };
+            }
+            return {
+              ok: true,
+              value: {
+                event: { code: "ignored_event", message: `Ignored: tool_call_update:${status}`, type: "warning" },
+                raw: envelope,
+              },
+            };
+          }
+          case "usage_update": {
+            const usage = {
+              inputTokens: numberField(update, "used"),
+              outputTokens: null,
+              totalTokens: numberField(update, "used"),
+              costUsd: toRecord(update.cost) ? numberField(toRecord(update.cost), "amount") : null,
+              raw: update,
+            };
+            return { ok: true, value: { event: { type: "usage", usage }, raw: envelope } };
+          }
+          default:
+            return {
+              ok: true,
+              value: {
+                event: { code: "ignored_event", message: `Ignored: session/update:${updateType}`, type: "warning" },
+                raw: envelope,
+              },
+            };
+        }
+      }
       case "thread.created":
         return normalizeSessionEvent("opencode", params, envelope, "session.created", "model");
       case "thread.resumed":
@@ -648,6 +731,31 @@ function normalizeAcpEvent(backend, envelope) {
   }
 
   switch (method) {
+    case "session/update": {
+      const update = toRecord(params.update);
+      const updateType = stringField(update, "sessionUpdate");
+      if (update === null || updateType === null) {
+        return invalidNormalized(envelope, "Gemini session/update payload was malformed.");
+      }
+      if (updateType === "agent_message_chunk") {
+        const content = toRecord(update.content);
+        const delta = stringField(content, "text");
+        return delta === null
+          ? invalidNormalized(envelope, "Gemini agent_message_chunk payload was malformed.")
+          : { ok: true, value: { event: { delta, type: "message.delta" }, raw: envelope } };
+      }
+      return {
+        ok: true,
+        value: {
+          event: {
+            code: "ignored_event",
+            message: `Ignored ACP event: session/update:${updateType}`,
+            type: "warning",
+          },
+          raw: envelope,
+        },
+      };
+    }
     case "session.created":
       return normalizeSessionEvent("gemini", params, envelope, "session.created", "model");
     case "session.resumed":
@@ -760,6 +868,77 @@ function normalizeAcpEvent(backend, envelope) {
   }
 }
 
+function parseStopReason(value) {
+  switch (value) {
+    case "cancelled":
+      return "cancelled";
+    case "max_tokens":
+    case "max_turn_requests":
+      return "timed_out";
+    case "refusal":
+      return "failed";
+    case "end_turn":
+    default:
+      return "completed";
+  }
+}
+
+async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs) {
+  const events = [];
+  let lastUsage = null;
+  let locator;
+  let text = "";
+
+  while (true) {
+    let envelope;
+    try {
+      envelope = await transport.nextEnvelope(eventTimeoutMs);
+    } catch (error) {
+      if (error?.code === "timeout") {
+        return { events, locator, ok: true, text, usage: lastUsage };
+      }
+      return { error, events, locator, ok: false, usage: lastUsage };
+    }
+
+    if (envelope === null) {
+      return { events, locator, ok: true, text, usage: lastUsage };
+    }
+
+    if (envelope.kind === "protocol_error") {
+      return { error: envelope.error, events, locator, ok: false, usage: lastUsage };
+    }
+
+    const normalized = normalizeAcpEvent(backend, envelope.message);
+    if (!normalized.ok) {
+      events.push({ event: { error: normalized.error, type: "error" }, raw: normalized.raw });
+      return { error: normalized.error, events, locator, ok: false, usage: lastUsage };
+    }
+
+    events.push(normalized.value);
+    const current = normalized.value.event;
+
+    if (current.type === "usage") {
+      lastUsage = current.usage;
+      continue;
+    }
+    if (current.type === "session.created" || current.type === "session.resumed") {
+      locator = current.locator;
+      continue;
+    }
+    if (current.type === "message.delta") {
+      text += current.delta;
+      continue;
+    }
+    if (current.type === "message.completed") {
+      text = current.text;
+      continue;
+    }
+    if (current.type === "error") {
+      return { error: current.error, events, locator, ok: false, usage: lastUsage };
+    }
+  }
+}
+
 async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
   const events = [];
   let lastUsage = null;
@@ -868,22 +1047,20 @@ async function runAcpQuery(payload) {
     const init = await transport.request(
       "initialize",
       {
-        clientName: "kodo-session-helper",
-        clientVersion: "1.0.0",
         protocolVersion: ACP_PROTOCOL_VERSION,
-        requestedCapabilities: {
-          initialize: true,
-          prompt: true,
-          resume: true,
-          sessionLifecycle: true,
-          streaming: true,
-          usage: true,
+        clientCapabilities: {
+          fs: {
+            readTextFile: false,
+            writeTextFile: false,
+          },
         },
       },
       Math.min(timeoutMs, STARTUP_TIMEOUT_MS),
     );
-    const capabilities = toRecord(init?.capabilities);
-    if (capabilities === null || booleanField(capabilities, "prompt") !== true) {
+    const initRecord = toRecord(init);
+    const capabilities = toRecord(initRecord?.agentCapabilities);
+    const promptCapabilities = toRecord(capabilities?.promptCapabilities);
+    if (capabilities === null || promptCapabilities === null) {
       throw parseAcpError(
         {
           code: "capability_mismatch",
@@ -894,60 +1071,56 @@ async function runAcpQuery(payload) {
       );
     }
 
-    let locator = parseLocator(init?.locator);
+    let locator = parseLocator(initRecord);
 
     if (payload.resumeSessionId) {
       const resumed = await transport.request(
-        "session.resume",
+        "session/load",
         {
-          backend: profile.backend,
           cwd: payload.projectDir,
-          locator: parseLocatorFromSessionId(payload.resumeSessionId),
-          model: payload.model,
+          mcpServers: [],
+          sessionId: parseLocatorFromSessionId(payload.resumeSessionId)?.conversationId ?? payload.resumeSessionId,
         },
         Math.min(timeoutMs, STARTUP_TIMEOUT_MS),
       );
-      locator = parseLocator(resumed?.locator ?? resumed) ?? locator;
+      locator = parseLocator(resumed) ?? locator;
     } else {
       const created = await transport.request(
-        "session.create",
+        "session/new",
         {
-          backend: profile.backend,
           cwd: payload.projectDir,
-          model: payload.model,
-          systemPrompt: payload.systemPrompt ?? null,
+          mcpServers: [],
         },
         Math.min(timeoutMs, STARTUP_TIMEOUT_MS),
       );
-      locator = parseLocator(created?.locator ?? created) ?? locator;
+      locator = parseLocator(created) ?? locator;
     }
 
     const promptResponse = await transport.request(
-      "prompt",
+      "session/prompt",
       {
-        cwd: payload.projectDir,
-        maxTurns: payload.maxTurns,
-        prompt: payload.prompt,
+        prompt: [{ type: "text", text: payload.prompt }],
+        sessionId: locator?.conversationId,
       },
       timeoutMs,
     );
 
     const promptRecord = toRecord(promptResponse);
-    if (booleanField(promptRecord, "accepted") === false) {
+    if (promptRecord === null || stringField(promptRecord, "stopReason") === null) {
       throw parseAcpError(
         {
-          code: "prompt_rejected",
-          message: stringField(promptRecord, "message") ?? "ACP prompt was rejected.",
+          code: "prompt_failed",
+          message: "ACP prompt response was malformed.",
         },
-        "prompt_rejected",
-        "ACP prompt was rejected.",
+        "prompt_failed",
+        "ACP prompt response was malformed.",
       );
     }
 
-    const outcome = await collectAcpQueryOutcome(
+    const outcome = await collectAcpUpdatesUntilIdle(
       transport,
       profile.backend,
-      Math.min(timeoutMs, EVENT_TIMEOUT_MS),
+      250,
     );
 
     const elapsedS = Number(((Date.now() - startedAt) / 1000).toFixed(3));
@@ -977,7 +1150,7 @@ async function runAcpQuery(payload) {
       };
     }
 
-    const finalLocator = outcome.result.locator ?? locator;
+    const finalLocator = outcome.locator ?? locator;
     return {
       acpBackend: profileInfo.selected,
       costBucket: profile.costBucket,
@@ -985,7 +1158,7 @@ async function runAcpQuery(payload) {
       errorCode: null,
       errorDetails: null,
       inputTokens: outcome.usage?.inputTokens ?? null,
-      isError: outcome.result.stopReason === "failed" || outcome.result.stopReason === "timed_out",
+      isError: parseStopReason(stringField(promptRecord, "stopReason")) === "failed",
       outputTokens: outcome.usage?.outputTokens ?? null,
       provider: profileInfo.provider,
       providerEnvVars: profileInfo.providerEnvVars,
@@ -993,7 +1166,7 @@ async function runAcpQuery(payload) {
       rawMessages,
       serverSessionId: finalLocator?.serverSessionId ?? null,
       sessionId: finalLocator?.conversationId ?? payload.resumeSessionId ?? null,
-      text: outcome.result.text ?? "",
+      text: outcome.text,
       usageRaw: outcome.usage?.raw ?? null,
     };
   } finally {
