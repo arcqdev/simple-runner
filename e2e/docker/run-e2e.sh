@@ -4,23 +4,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP_DIR="$ROOT_DIR/e2e/docker/simple-app"
-RUNS_DIR="$ROOT_DIR/.tmp/kodo-runs"
+RUNS_DIR="$ROOT_DIR/.tmp/simple-runner-runs"
 PROOF_DIR="$APP_DIR/.e2e"
 PORT=3210
 
 export PATH="$ROOT_DIR/e2e/docker/fake-bin:$PATH"
-export KODO_ENABLE_SESSION_RUNTIME=1
-export KODO_RUNS_DIR="$RUNS_DIR"
+export SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME=1
+export SIMPLE_RUNNER_RUNS_DIR="$RUNS_DIR"
 export GEMINI_API_KEY="${GEMINI_API_KEY:-e2e-gemini-key}"
 
 rm -rf "$RUNS_DIR" "$APP_DIR/dist" "$PROOF_DIR"
 mkdir -p "$PROOF_DIR"
 
-echo "== Building kodo =="
+echo "== Building simple-runner =="
 npm run build
 
 echo "== Backend preflight =="
-node -e 'console.log("ENV", JSON.stringify({ KODO_ENABLE_SESSION_RUNTIME: process.env.KODO_ENABLE_SESSION_RUNTIME, KODO_RUNS_DIR: process.env.KODO_RUNS_DIR }))'
+node -e 'console.log("ENV", JSON.stringify({ SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME: process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME, SIMPLE_RUNNER_RUNS_DIR: process.env.SIMPLE_RUNNER_RUNS_DIR }))'
 CODEX_BIN="$(which codex)"
 CLAUDE_BIN="$(which claude)"
 GEMINI_BIN="$(which gemini)"
@@ -35,7 +35,7 @@ claude --version
 gemini --version
 opencode --version
 
-echo "== Running kodo e2e workflow =="
+echo "== Running simple-runner e2e workflow =="
 node dist/cli.js \
   --yes \
   --skip-intake \
@@ -112,7 +112,7 @@ cat "$PROOF_DIR/opencode-proof.json"
 
 LATEST_RUN_LOG="$(find "$RUNS_DIR" -name log.jsonl 2>/dev/null | sort | tail -n 1)"
 if [[ -z "$LATEST_RUN_LOG" ]]; then
-  LATEST_RUN_LOG="$(find "$HOME/.kodo/runs" -name log.jsonl 2>/dev/null | sort | tail -n 1)"
+  LATEST_RUN_LOG="$(find "$HOME/.simple-runner/runs" -name log.jsonl 2>/dev/null | sort | tail -n 1)"
 fi
 
 echo "== Proof: agent models used =="

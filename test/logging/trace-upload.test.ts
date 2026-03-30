@@ -14,7 +14,7 @@ import {
 function makeTempDir(): string {
   const directory = path.join(
     os.tmpdir(),
-    `kodo-trace-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-trace-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(directory, { recursive: true });
   return directory;
@@ -26,10 +26,10 @@ afterEach(() => {
 
 describe("trace upload", () => {
   it("honors the trace upload environment gate", () => {
-    vi.stubEnv("KODO_TRACE_UPLOAD", "0");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_UPLOAD", "0");
     expect(isTraceUploadEnabled()).toBe(false);
 
-    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_UPLOAD", "1");
     expect(isTraceUploadEnabled()).toBe(true);
   });
 
@@ -50,9 +50,9 @@ describe("trace upload", () => {
     writeFileSync(path.join(runDir, "config.json"), "{}\n", "utf8");
     writeFileSync(path.join(runDir, "team.json"), '{"agents":{}}\n', "utf8");
 
-    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
-    vi.stubEnv("KODO_TRACE_GCS_BUCKET", "bucket-under-test");
-    vi.stubEnv("KODO_TRACE_GCP_PROJECT", "project-under-test");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_UPLOAD", "1");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_GCS_BUCKET", "bucket-under-test");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_GCP_PROJECT", "project-under-test");
 
     const requests: Array<{ args: string[]; body: Buffer | string }> = [];
     const result = uploadTrace(
@@ -126,7 +126,7 @@ describe("trace upload", () => {
   it("returns a no-op result when the run has no archiveable files", () => {
     const runDir = makeTempDir();
 
-    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_UPLOAD", "1");
 
     const result = uploadTrace(
       {
@@ -163,7 +163,7 @@ describe("trace upload", () => {
     const runDir = makeTempDir();
     writeFileSync(path.join(runDir, "log.jsonl"), '{"event":"run_start"}\n', "utf8");
 
-    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_UPLOAD", "1");
 
     const result = uploadTrace(
       {

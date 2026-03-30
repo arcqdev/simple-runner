@@ -2,12 +2,10 @@ import { readFileSync } from "node:fs";
 import os from "node:os";
 
 import {
-  apiOrchestratorModelOptions,
   availableModelChoices,
   checkApiKey,
   defaultApiModel,
   impliedOrchestratorFromModel,
-  listOllamaModels,
   normalizeOllamaModel,
 } from "../config/models.js";
 import { getTeamByName, listAvailableTeams } from "../config/team-config.js";
@@ -40,6 +38,7 @@ export type ResolvedGoal = {
 type SavedRuntimeParams = Partial<ResolvedRuntimeParams> & Record<string, unknown>;
 
 const CLI_ORCHESTRATORS = new Set([
+  "pi",
   "claude-code",
   "gemini-cli",
   "opencode",
@@ -73,37 +72,49 @@ function hasAnyApiKey(env = process.env): boolean {
 }
 
 function genericApiKeyError(orchestrator: string, model: string | null): string | null {
-  if (orchestrator !== "api" || model === null || isOllamaLike(model) || hasAnyApiKey()) {
+  if (
+    orchestrator === "pi" ||
+    orchestrator !== "api" ||
+    model === null ||
+    isOllamaLike(model) ||
+    hasAnyApiKey()
+  ) {
     return null;
   }
   return "API orchestrator selected but no provider API key was found in the environment.";
 }
 
-function preferredOrchestrator(): string {
-  const backends = availableBackends();
-  if (backends["gemini-cli"]) {
-    return "gemini-cli";
+function validateOrchestratorCredentials(orchestrator: string, model: string): string | null {
+  if (orchestrator === "pi") {
+    return null;
   }
+
+  return genericApiKeyError(orchestrator, model) ?? checkApiKey(orchestrator, model);
+}
+
+function preferredOrchestrator(): string {
+  return "pi";
+}
+
+function availablePreferredOrchestrators(): string[] {
+  const backends = availableBackends();
+  const choices = ["pi"];
   if (backends.opencode) {
-    return "opencode";
+    choices.push("opencode");
   }
   if (backends.claude) {
-    return "claude-code";
-  }
-  if (backends.cursor) {
-    return "cursor";
-  }
-  if (backends.kimi) {
-    return "kimi-code";
+    choices.push("claude-code");
   }
   if (backends.codex) {
-    return "codex";
+    choices.push("codex");
   }
-  return "api";
+  return choices;
 }
 
 function defaultCliModel(orchestrator: string): string {
   switch (orchestrator) {
+    case "pi":
+      return "gemini-2.5-flash";
     case "claude-code":
       return "opus";
     case "cursor":
@@ -179,29 +190,20 @@ function selectTeam(defaultValue: string, projectDir: string): string {
 
 function selectOrchestrator(): { orchestrator: string; orchestratorModel: string } {
   const prompt = getPromptAdapter();
-  const backends = availableBackends();
-  const hasApi = hasAnyApiKey() || listOllamaModels().length > 0;
-  const choices: string[] = [];
-
-  choices.push("api (recommended — delegates cleanly, pay-per-token)");
-  if (backends["gemini-cli"]) {
-    choices.push("gemini-cli (ACP runtime, Gemini native)");
-  }
-  if (backends.opencode) {
-    choices.push("opencode (ACP runtime, Gemini provider)");
-  }
-  if (backends.claude) {
-    choices.push("claude-code (free on Max subscription)");
-  }
-  if (backends.codex) {
-    choices.push("codex (free on Codex subscription)");
-  }
-  if (backends.cursor) {
-    choices.push("cursor (free on Cursor subscription)");
-  }
-  if (backends.kimi) {
-    choices.push("kimi-code");
-  }
+  const choices = availablePreferredOrchestrators().map((orchestrator) => {
+    switch (orchestrator) {
+      case "pi":
+        return "pi (base orchestrator via pi)";
+      case "opencode":
+        return "opencode (ACP runtime, Gemini provider)";
+      case "claude-code":
+        return "claude-code (Claude subscription)";
+      case "codex":
+        return "codex (Codex subscription)";
+      default:
+        return orchestrator;
+    }
+  });
 
   if (choices.length === 0) {
     throw new CliError(
@@ -209,9 +211,8 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
     );
   }
 
-  const defaultOrchestrator = hasApi
-    ? "api (recommended — delegates cleanly, pay-per-token)"
-    : (choices.find((choice) => choice.startsWith(preferredOrchestrator())) ?? choices[0]);
+  const defaultOrchestrator =
+    choices.find((choice) => choice.startsWith(preferredOrchestrator())) ?? choices[0];
   const selected = prompt.select("Orchestrator:", choices, defaultOrchestrator);
   if (selected === null) {
     throw new CliError("Cancelled.");
@@ -221,14 +222,14 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
 
   let modelChoices: string[];
   switch (orchestrator) {
-    case "api": {
-      modelChoices = availableModelChoices()
-        .map(([alias, displayName, providerName]) => `${alias} — ${displayName} (${providerName})`)
-        .concat(listOllamaModels().map((model) => `ollama:${model}`));
-      if (modelChoices.length === 0) {
-        modelChoices = apiOrchestratorModelOptions();
-      }
-      modelChoices = [...modelChoices, "(custom)"];
+    case "pi": {
+      modelChoices = [
+        "gemini-2.5-flash",
+        "gemini-3-flash",
+        "anthropic/claude-sonnet-4",
+        "openai/gpt-5",
+        "(custom)",
+      ];
       break;
     }
     case "claude-code":
@@ -281,9 +282,7 @@ function selectOrchestrator(): { orchestrator: string; orchestratorModel: string
   if (isOllamaLike(orchestratorModel)) {
     orchestratorModel = normalizeOllamaModel(orchestratorModel);
   }
-  const keyError =
-    genericApiKeyError(orchestrator, orchestratorModel) ??
-    checkApiKey(orchestrator, orchestratorModel);
+  const keyError = validateOrchestratorCredentials(orchestrator, orchestratorModel);
   if (keyError !== null) {
     throw new CliError(`${keyError}\nSet the key in your environment or .env file and try again.`);
   }
@@ -360,11 +359,10 @@ function selectInteractiveRuntimeParams(projectDir: string): ResolvedRuntimePara
 
   const backends = availableBackends();
   const backendSummary = [
-    `Gemini CLI: ${backends["gemini-cli"] ? "yes" : "not found"}`,
+    "PI: bundled",
     `OpenCode: ${backends.opencode ? "yes" : "not found"}`,
     `Claude Code: ${backends.claude ? "yes" : "not found"}`,
     `Codex: ${backends.codex ? "yes" : "not found"}`,
-    `Cursor: ${backends.cursor ? "yes" : "not found"}`,
   ];
   writeStdout(`  Backends: ${backendSummary.join(" | ")}\n\n`);
 
@@ -420,8 +418,6 @@ export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
       orchestrator = explicitBackend;
     } else if (explicitModel !== null) {
       orchestrator = impliedOrchestratorFromModel(explicitModel) ?? "api";
-    } else if (hasAnyApiKey()) {
-      orchestrator = "api";
     } else {
       orchestrator = preferredOrchestrator();
     }
@@ -431,9 +427,7 @@ export function resolveRuntimeParams(flags: MainFlags): ResolvedRuntimeParams {
     if (orchestratorModel !== null && isOllamaLike(orchestratorModel)) {
       orchestratorModel = normalizeOllamaModel(orchestratorModel);
     }
-    const keyError =
-      genericApiKeyError(orchestrator, orchestratorModel) ??
-      checkApiKey(orchestrator, orchestratorModel);
+    const keyError = validateOrchestratorCredentials(orchestrator, orchestratorModel);
     if (keyError !== null) {
       throw new CliError(keyError);
     }

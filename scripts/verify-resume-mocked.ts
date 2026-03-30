@@ -16,7 +16,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function makeTempDir(label: string): string {
   return path.join(
     os.tmpdir(),
-    `kodo-resume-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-resume-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
 }
 
@@ -38,11 +38,11 @@ function main(): void {
   const tempRoot = makeTempDir("root");
   const runsDir = path.join(tempRoot, "runs");
   const projectDir = path.join(tempRoot, "project");
-  const previousRunsDir = process.env.KODO_RUNS_DIR;
-  const previousSessionRuntime = process.env.KODO_ENABLE_SESSION_RUNTIME;
+  const previousRunsDir = process.env.SIMPLE_RUNNER_RUNS_DIR;
+  const previousSessionRuntime = process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME;
 
-  process.env.KODO_RUNS_DIR = runsDir;
-  process.env.KODO_ENABLE_SESSION_RUNTIME = "0";
+  process.env.SIMPLE_RUNNER_RUNS_DIR = runsDir;
+  process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME = "0";
 
   try {
     const latestFixture = createMockInterruptedRun({
@@ -73,14 +73,14 @@ function main(): void {
   } finally {
     rmSync(tempRoot, { force: true, recursive: true });
     if (previousRunsDir === undefined) {
-      delete process.env.KODO_RUNS_DIR;
+      delete process.env.SIMPLE_RUNNER_RUNS_DIR;
     } else {
-      process.env.KODO_RUNS_DIR = previousRunsDir;
+      process.env.SIMPLE_RUNNER_RUNS_DIR = previousRunsDir;
     }
     if (previousSessionRuntime === undefined) {
-      delete process.env.KODO_ENABLE_SESSION_RUNTIME;
+      delete process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME;
     } else {
-      process.env.KODO_ENABLE_SESSION_RUNTIME = previousSessionRuntime;
+      process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME = previousSessionRuntime;
     }
   }
 }

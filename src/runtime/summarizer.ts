@@ -106,7 +106,7 @@ function probeGeminiApiKey(env: NodeJS.ProcessEnv): string | null {
 }
 
 function overrideBackend(env: NodeJS.ProcessEnv): SummarizerBackend | null {
-  const raw = env.KODO_SUMMARIZER_BACKEND?.trim();
+  const raw = env.SIMPLE_RUNNER_SUMMARIZER_BACKEND?.trim();
   if (!raw) {
     return null;
   }

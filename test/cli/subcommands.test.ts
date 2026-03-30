@@ -18,7 +18,7 @@ afterEach(() => {
 function makeHomeDir(): string {
   const homeDir = path.join(
     os.tmpdir(),
-    `kodo-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
@@ -34,7 +34,7 @@ describe("runCli subcommands", () => {
     const io = captureOutput();
 
     expect(runCli(["teams", "--help"])).toBe(0);
-    expect(io.stdout()).toContain("Usage: kodo teams");
+    expect(io.stdout()).toContain("Usage: simple-runner teams");
     io.restore();
   });
 
@@ -65,7 +65,7 @@ describe("runCli subcommands", () => {
     expect(runCli(["teams"])).toBe(0);
     expect(io.stdout()).toContain("full");
     expect(io.stdout()).toContain("quick");
-    expect(io.stdout()).toContain("Hint: Run 'kodo teams auto'");
+    expect(io.stdout()).toContain("Hint: Run 'simple-runner teams auto'");
     io.restore();
   });
 
@@ -79,10 +79,10 @@ describe("runCli subcommands", () => {
 
     const io = captureOutput();
     expect(runCli(["teams", "auto", "quick"])).toBe(0);
-    const savedPath = path.join(homeDir, ".kodo", "teams", "quick.json");
+    const savedPath = path.join(homeDir, ".simple-runner", "teams", "quick.json");
     expect(existsSync(savedPath)).toBe(true);
     expect(io.stdout()).toContain("Generated team 'quick'");
-    expect(io.stdout()).toContain("Use with: kodo --team quick");
+    expect(io.stdout()).toContain("Use with: simple-runner --team quick");
 
     const saved = JSON.parse(readFileSync(savedPath, "utf8")) as {
       agents: Record<string, { backend: string }>;
@@ -115,7 +115,7 @@ describe("runCli subcommands", () => {
     const io = captureOutput();
 
     expect(runCli(["teams", "add", "custom"])).toBe(0);
-    const savedPath = path.join(homeDir, ".kodo", "teams", "custom.json");
+    const savedPath = path.join(homeDir, ".simple-runner", "teams", "custom.json");
     expect(JSON.parse(readFileSync(savedPath, "utf8"))).toMatchObject({
       description: "Custom team",
       agents: {
@@ -139,7 +139,7 @@ describe("runCli subcommands", () => {
     const io = captureOutput();
 
     expect(runCli(["teams", "edit", "quick"])).toBe(0);
-    const savedPath = path.join(homeDir, ".kodo", "teams", "quick.json");
+    const savedPath = path.join(homeDir, ".simple-runner", "teams", "quick.json");
     expect(existsSync(savedPath)).toBe(true);
     expect(readFileSync(savedPath, "utf8")).toContain("Quick but edited");
     expect(io.stdout()).toContain("Copying built-in team 'quick'");
@@ -223,7 +223,7 @@ describe("runCli subcommands", () => {
 
     expect(runCli(["update"])).toBe(2);
     expect(io.stderr()).toContain("Update failed.");
-    expect(io.stderr()).toContain("uv tool upgrade kodo --reinstall");
+    expect(io.stderr()).toContain("uv tool upgrade simple-runner --reinstall");
     io.restore();
   }, 10000);
 

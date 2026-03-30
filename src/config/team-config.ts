@@ -346,7 +346,7 @@ export function generateAutoTeam(
   const backends = availableBackends();
   if (!Object.values(backends).some(Boolean)) {
     throw new Error(
-      "No backends available. Install at least one of:\n  claude, cursor, codex, gemini-cli, opencode\nRun 'kodo backends' for install links.",
+      "No backends available. Install at least one of:\n  claude, cursor, codex, gemini-cli, opencode\nRun 'simple-runner backends' for install links.",
     );
   }
 
@@ -364,17 +364,14 @@ export function generateAutoTeam(
   }
 
   const fastFallbacks: Array<[TeamBackend, string]> = [
-    ["gemini-cli", "gemini-3-flash"],
     ["opencode", "gemini-2.5-flash"],
-    ["cursor", "composer-1.5"],
     ["codex", "gpt-5.4"],
     ["claude", "sonnet"],
   ];
   const smartFallbacks: Array<[TeamBackend, string]> = [
     ["opencode", "gemini-2.5-flash"],
-    ["gemini-cli", "gemini-3-pro"],
     ["claude", "opus"],
-    ["cursor", "composer-1.5"],
+    ["codex", "gpt-5.4"],
   ];
 
   const findFallback = (candidates: Array<[TeamBackend, string]>): [TeamBackend, string] | null =>

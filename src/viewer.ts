@@ -103,7 +103,7 @@ function cleanupStaleViewerFiles(now = Date.now()): void {
   const cutoff = now - 60 * 60 * 1000;
 
   for (const entry of readdirSync(tempDir)) {
-    if (!entry.startsWith("kodo_viewer_")) {
+    if (!entry.startsWith("simple_runner_viewer_")) {
       continue;
     }
 
@@ -251,7 +251,9 @@ function buildHtml(logPath: string | null): string {
   const events = logPath === null ? [] : loadEvents(logPath);
   const index = buildRunIndex();
   const title =
-    logPath === null ? "kodo log viewer" : `kodo log viewer — ${path.basename(logPath)}`;
+    logPath === null
+      ? "simple-runner log viewer"
+      : `simple-runner log viewer — ${path.basename(logPath)}`;
   const traceUploadEnabled = isTraceUploadEnabled();
 
   return `<!doctype html>
@@ -930,7 +932,7 @@ function buildHtml(logPath: string | null): string {
 
       runGridEl.innerHTML = "";
       if (runs.length === 0) {
-        runGridEl.innerHTML = '<div class="empty">No runs match the current filters. Adjust the toggles above, run kodo first, or open a local log file.</div>';
+        runGridEl.innerHTML = '<div class="empty">No runs match the current filters. Adjust the toggles above, run simple-runner first, or open a local log file.</div>';
         return;
       }
 
@@ -1189,7 +1191,7 @@ function buildHtml(logPath: string | null): string {
       } catch {
         const run = EMBEDDED_INDEX.find((candidate) => candidate.run_id === runId);
         const message = run?.log_file
-          ? 'To inspect this run from file mode, open: ' + run.log_file + '\\n\\nUse kodo logs --port 8080 for in-browser run browsing.'
+          ? 'To inspect this run from file mode, open: ' + run.log_file + '\\n\\nUse simple-runner logs --port 8080 for in-browser run browsing.'
           : 'Run could not be loaded.';
         window.alert(message);
       }
@@ -1197,7 +1199,7 @@ function buildHtml(logPath: string | null): string {
 
     function showLogView(events, runId, runMeta = null) {
       currentRunMeta = runMeta;
-      const inferredTitle = runId ? "kodo log viewer — " + runId : INITIAL_TITLE;
+      const inferredTitle = runId ? "simple-runner log viewer — " + runId : INITIAL_TITLE;
       titleEl.textContent = inferredTitle;
       metaEl.textContent = [
         INITIAL_LOG_PATH || runId || "",
@@ -1288,7 +1290,7 @@ function buildHtml(logPath: string | null): string {
 }
 
 function maybeOpenExternal(target: string): void {
-  if (process.env.KODO_NO_VIEWER || process.env.CI || process.env.VITEST) {
+  if (process.env.SIMPLE_RUNNER_NO_VIEWER || process.env.CI || process.env.VITEST) {
     return;
   }
 
@@ -1317,7 +1319,7 @@ export function openViewer(logPath: string | null = null, options: ViewerOptions
   }
 
   cleanupStaleViewerFiles();
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo_viewer_"));
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "simple_runner_viewer_"));
   const htmlPath = path.join(tempDir, "index.html");
   writeFileSync(htmlPath, buildHtml(logPath), "utf8");
   const url = new URL(`file://${htmlPath}`).toString();
@@ -1467,9 +1469,9 @@ export async function runViewerCli(argv = process.argv.slice(2)): Promise<number
     if (parsed.help) {
       process.stdout.write(
         [
-          "Usage: kodo-viewer [logfile] [--serve] [--port PORT]",
+          "Usage: simple-runner-viewer [logfile] [--serve] [--port PORT]",
           "",
-          "Open a JSONL log file in the kodo viewer.",
+          "Open a JSONL log file in the simple-runner viewer.",
         ].join("\n") + "\n",
       );
       return 0;

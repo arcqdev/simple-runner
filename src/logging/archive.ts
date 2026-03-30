@@ -125,7 +125,7 @@ export function createTraceArchivePayload(runDir: string): ArchivePayloadResult 
 }
 
 function buildArchivePayload(runDir: string, entries: string[]): ArchivePayloadResult {
-  const stagingDir = mkdtempSync(path.join(os.tmpdir(), "kodo-archive-"));
+  const stagingDir = mkdtempSync(path.join(os.tmpdir(), "simple-runner-archive-"));
   const stats: ArchiveStats = {
     filesChanged: 0,
     redactions: 0,

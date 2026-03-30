@@ -8,7 +8,7 @@ import { VERSION } from "../core/version.js";
 import { createTraceArchivePayload, type ArchiveStats } from "./archive.js";
 
 const DEFAULT_GCP_PROJECT = "covenance-469421";
-const DEFAULT_GCS_BUCKET = "kodo-bench";
+const DEFAULT_GCS_BUCKET = "simple-runner-bench";
 
 export type TraceUploadOptions = {
   agentCount: number;
@@ -66,7 +66,7 @@ function envEnabled(name: string): boolean {
 }
 
 export function isTraceUploadEnabled(): boolean {
-  return envEnabled("KODO_TRACE_UPLOAD");
+  return envEnabled("SIMPLE_RUNNER_TRACE_UPLOAD");
 }
 
 function defaultRunCommand(command: string, args: string[]): CommandResult {
@@ -90,7 +90,7 @@ function defaultAccessTokenProvider(
   runCommand: (command: string, args: string[]) => CommandResult,
 ): string | null {
   const direct =
-    process.env.KODO_TRACE_UPLOAD_ACCESS_TOKEN ?? process.env.GOOGLE_OAUTH_ACCESS_TOKEN;
+    process.env.SIMPLE_RUNNER_TRACE_UPLOAD_ACCESS_TOKEN ?? process.env.GOOGLE_OAUTH_ACCESS_TOKEN;
   if (typeof direct === "string" && direct.trim().length > 0) {
     return direct.trim();
   }
@@ -112,11 +112,11 @@ function defaultAccessTokenProvider(
 }
 
 function gcpProject(): string {
-  return process.env.KODO_TRACE_GCP_PROJECT?.trim() || DEFAULT_GCP_PROJECT;
+  return process.env.SIMPLE_RUNNER_TRACE_GCP_PROJECT?.trim() || DEFAULT_GCP_PROJECT;
 }
 
 function gcsBucket(): string {
-  return process.env.KODO_TRACE_GCS_BUCKET?.trim() || DEFAULT_GCS_BUCKET;
+  return process.env.SIMPLE_RUNNER_TRACE_GCS_BUCKET?.trim() || DEFAULT_GCS_BUCKET;
 }
 
 function firestoreValue(value: unknown): Record<string, unknown> {
@@ -190,7 +190,7 @@ export function uploadTrace(
     return { attempted: true, reason: "no GCP access token available", uploaded: false };
   }
 
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-trace-upload-"));
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "simple-runner-trace-upload-"));
   const payloadPath = path.join(tempDir, "trace.tar.gz");
   const firestorePath = path.join(tempDir, "trace-metadata.json");
   const bucket = gcsBucket();
@@ -231,7 +231,7 @@ export function uploadTrace(
       finished: options.finished,
       goal: options.goal.slice(0, 2000),
       host: dependencies.getHostname?.() ?? os.hostname(),
-      kodo_version: VERSION,
+      simple_runner_version: VERSION,
       model: options.model,
       orchestrator: options.orchestrator,
       outcome:

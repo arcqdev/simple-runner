@@ -9,7 +9,7 @@ import { findIncompleteRuns, listRuns } from "../../src/logging/runs.js";
 function makeHomeDir(): string {
   const homeDir = path.join(
     os.tmpdir(),
-    `kodo-log-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-log-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
@@ -21,7 +21,7 @@ function writeEvents(
   fileName: "log.jsonl" | "run.jsonl",
   events: Array<Record<string, unknown>>,
 ): void {
-  const runDir = path.join(homeDir, ".kodo", "runs", runId);
+  const runDir = path.join(homeDir, ".simple-runner", "runs", runId);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(
     runDir + `/${fileName}`,
@@ -31,7 +31,7 @@ function writeEvents(
 }
 
 function writeRuntimeState(homeDir: string, runId: string, state: Record<string, unknown>): void {
-  const runDir = path.join(homeDir, ".kodo", "runs", runId);
+  const runDir = path.join(homeDir, ".simple-runner", "runs", runId);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(
     path.join(runDir, "runtime-state.json"),
@@ -133,7 +133,7 @@ describe("listRuns", () => {
       { event: "cycle_end", summary: "ok" },
     ]);
 
-    const badDir = path.join(homeDir, ".kodo", "runs", "bad_run");
+    const badDir = path.join(homeDir, ".simple-runner", "runs", "bad_run");
     mkdirSync(badDir, { recursive: true });
     writeFileSync(path.join(badDir, "log.jsonl"), "not json at all\n", "utf8");
 

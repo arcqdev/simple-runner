@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import type { MainFlags } from "../cli/types.js";
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../cli/runtime.js";
@@ -15,7 +17,7 @@ import {
 } from "../config/team-config.js";
 import { resolveApiModel } from "../config/models.js";
 import { emit as emitLogEvent, type RunDir } from "../logging/log.js";
-import { availableBackends } from "./backends.js";
+import { availableBackends, commandOnPath } from "./backends.js";
 import {
   cleanupStaleWorktrees,
   commitWorktreeChanges,
@@ -185,6 +187,15 @@ type ApiAdvisorDeps = {
   requestJson?: (request: JsonRequest, env: NodeJS.ProcessEnv) => JsonResponse;
 };
 
+type PiAdvisorDeps = {
+  env?: NodeJS.ProcessEnv;
+  runPi?: (
+    prompt: string,
+    model: string,
+    env: NodeJS.ProcessEnv,
+  ) => { exitCode: number; stderr: string; stdout: string; toolOutput: string | null };
+};
+
 type StageAdvisor = {
   assess: (
     goal: string,
@@ -230,13 +241,14 @@ export type RuntimeOrchestrator =
   | CodexCliRuntimeOrchestrator
   | CursorCliRuntimeOrchestrator
   | GeminiCliRuntimeOrchestrator
+  | PiRuntimeOrchestrator
   | OpencodeRuntimeOrchestrator;
 
 const GIT_AUTHOR_ENV = {
   GIT_AUTHOR_EMAIL: "noreply@github.com",
-  GIT_AUTHOR_NAME: "kodo",
+  GIT_AUTHOR_NAME: "simple-runner",
   GIT_COMMITTER_EMAIL: "noreply@github.com",
-  GIT_COMMITTER_NAME: "kodo",
+  GIT_COMMITTER_NAME: "simple-runner",
 };
 
 const SIGNAL = "(?:ALL CHECKS PASS|MINOR ISSUES FIXED)";
@@ -710,6 +722,128 @@ function buildApiAdvisorPrompt(
   return lines.join("\n");
 }
 
+function repoRootFromRuntime(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+}
+
+function resolvePiInvocation():
+  | {
+      args: string[];
+      command: string;
+    }
+  | null {
+  if (commandOnPath("pi")) {
+    return { args: [], command: "pi" };
+  }
+
+  const piMonoRoot = path.join(repoRootFromRuntime(), "pi-mono");
+  const tsxPath = path.join(piMonoRoot, "node_modules", ".bin", "tsx");
+  const cliPath = path.join(piMonoRoot, "packages", "coding-agent", "src", "cli.ts");
+
+  if (existsSync(tsxPath) && existsSync(cliPath)) {
+    return { args: [cliPath], command: tsxPath };
+  }
+
+  return null;
+}
+
+function writePiImplementGoalExtension(tempDir: string): string {
+  const filePath = path.join(tempDir, "simple-runner-pi-implement-goal.mjs");
+  writeFileSync(
+    filePath,
+    [
+      'import { writeFileSync } from "node:fs";',
+      'import { Type } from "@mariozechner/pi-ai";',
+      "",
+      "export default function (pi) {",
+      "  pi.registerTool({",
+      '    name: "implement_goal",',
+      '    label: "Implement Goal",',
+      '    description: "Select the next candidate stage group to execute.",',
+      "    parameters: Type.Object({",
+      '      reasoning: Type.Optional(Type.String({ description: "Why this group should run next" })),',
+      '      stageIndexes: Type.Array(Type.Number({ description: "Stage index" }), { description: "Stage indexes for the selected group" }),',
+      "    }),",
+      "    async execute(_toolCallId, params) {",
+      '      const outputPath = process.env.SIMPLE_RUNNER_PI_TOOL_OUTPUT_PATH;',
+      '      if (typeof outputPath === "string" && outputPath.length > 0) {',
+      '        writeFileSync(outputPath, `${JSON.stringify(params, null, 2)}\\n`, "utf8");',
+      "      }",
+      "      return {",
+      '        content: [{ type: "text", text: `Selected stages: ${JSON.stringify(params.stageIndexes ?? [])}` }],',
+      "        details: params,",
+      "      };",
+      "    },",
+      "  });",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return filePath;
+}
+
+function runPiAdvisorPrompt(
+  prompt: string,
+  model: string,
+  env: NodeJS.ProcessEnv,
+): { exitCode: number; stderr: string; stdout: string; toolOutput: string | null } {
+  const invocation = resolvePiInvocation();
+
+  if (invocation === null) {
+    return {
+      exitCode: 1,
+      stderr: "pi orchestrator unavailable: install pi or keep ../pi-mono checked out with dependencies",
+      stdout: "",
+      toolOutput: null,
+    };
+  }
+
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "simple-runner-pi-"));
+
+  try {
+    const outputPath = path.join(tempDir, "implement-goal.json");
+    const extensionPath = writePiImplementGoalExtension(tempDir);
+    const result = spawnSync(
+      invocation.command,
+      [
+        ...invocation.args,
+        "--print",
+        "--no-session",
+        "--no-tools",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+        "--no-extensions",
+        "--extension",
+        extensionPath,
+        "--model",
+        model,
+        prompt,
+      ],
+      {
+        cwd: repoRootFromRuntime(),
+        encoding: "utf8",
+        env: {
+          ...env,
+          SIMPLE_RUNNER_PI_TOOL_OUTPUT_PATH: outputPath,
+        },
+      },
+    );
+
+    const toolOutput = existsSync(outputPath) ? readFileSync(outputPath, "utf8") : null;
+
+    return {
+      exitCode: result.status ?? 1,
+      stderr: result.stderr ?? "",
+      stdout: result.stdout ?? "",
+      toolOutput,
+    };
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
 export class ApiToolStageAdvisor implements StageAdvisor {
   readonly #basePlan: GoalPlan;
   readonly #deps: Required<ApiAdvisorDeps>;
@@ -928,6 +1062,160 @@ export class ApiToolStageAdvisor implements StageAdvisor {
       action: "run_group",
       group,
       reasoning: "API advisor fallback selected the next candidate group.",
+    };
+  }
+}
+
+export class PiToolStageAdvisor implements StageAdvisor {
+  readonly #basePlan: GoalPlan;
+  readonly #deps: Required<PiAdvisorDeps>;
+  readonly #followUpQueue: FollowUpStageSpec[] = [];
+  readonly #model: string;
+  readonly #seenFollowUps = new Set<string>();
+  #nextDynamicIndex: number;
+
+  constructor(plan: GoalPlan, model: string, deps: PiAdvisorDeps = {}) {
+    this.#basePlan = plan;
+    this.#model = model;
+    this.#nextDynamicIndex = plan.stages.length + 1;
+    this.#deps = {
+      env: deps.env ?? process.env,
+      runPi: deps.runPi ?? runPiAdvisorPrompt,
+    };
+  }
+
+  assess(
+    goal: string,
+    completedSummaries: string[],
+    completedStages: number[],
+    projectDir: string,
+  ): AdvisorDecision {
+    emitLogEvent("advisor_assess_start", {
+      completed_stages: completedStages.length,
+      planned_stages: this.#basePlan.stages.length,
+    });
+
+    const latestSummary = completedSummaries.at(-1)?.trim() ?? "";
+    if (/^ADVISOR_DONE:/imu.test(latestSummary)) {
+      const summary = latestSummary.replace(/^ADVISOR_DONE:\s*/imu, "").trim() || goal;
+      emitLogEvent("advisor_assess_end", {
+        action: "done",
+        reasoning: "Completed summaries indicate the goal is already complete.",
+      });
+      return {
+        action: "done",
+        reasoning: "Completed summaries indicate the goal is already complete.",
+        summary,
+      };
+    }
+
+    const nextDynamicIndex = { current: this.#nextDynamicIndex };
+    const candidateGroups = candidateGroupsForAdvisor(
+      this.#basePlan,
+      completedSummaries,
+      completedStages,
+      projectDir,
+      this.#seenFollowUps,
+      this.#followUpQueue,
+      nextDynamicIndex,
+    );
+
+    if (candidateGroups.length === 0) {
+      emitLogEvent("advisor_assess_end", {
+        action: "done",
+        reasoning: "No remaining planned stages or discovered follow-up work.",
+      });
+      return {
+        action: "done",
+        reasoning: "No remaining planned stages or discovered follow-up work.",
+        summary: latestSummary || `Completed adaptive execution for: ${goal}`,
+      };
+    }
+
+    try {
+      const result = this.#deps.runPi(
+        buildApiAdvisorPrompt(goal, completedSummaries, candidateGroups),
+        this.#model,
+        this.#deps.env,
+      );
+
+      if (result.exitCode === 0) {
+        const text = result.stdout.trim();
+        if (text.startsWith("ADVISOR_DONE:")) {
+          const summary = text.replace(/^ADVISOR_DONE:\s*/u, "").trim() || goal;
+          emitLogEvent("advisor_assess_end", {
+            action: "done",
+            reasoning: "PI advisor marked the goal complete.",
+          });
+          return {
+            action: "done",
+            reasoning: "PI advisor marked the goal complete.",
+            summary,
+          };
+        }
+
+        if (result.toolOutput !== null) {
+          const parsed = JSON.parse(result.toolOutput) as { stageIndexes?: unknown };
+          const stageIndexes = normalizeStageIndexes(parsed.stageIndexes);
+          const selected =
+            candidateGroups.find((group) => {
+              const indexes = group.map((stage) => stage.index);
+              return (
+                indexes.length === stageIndexes.length &&
+                indexes.every((index) => stageIndexes.includes(index))
+              );
+            }) ?? null;
+
+          if (selected !== null) {
+            const queuedFollowUp = this.#followUpQueue[0];
+            if (
+              queuedFollowUp !== undefined &&
+              selected.length === 1 &&
+              selected[0]?.index === this.#nextDynamicIndex
+            ) {
+              this.#followUpQueue.shift();
+              this.#nextDynamicIndex += 1;
+            }
+            emitLogEvent("advisor_assess_end", {
+              action: "run_group",
+              reasoning: "PI advisor selected the next stage group.",
+              stages: selected.map((stage) => stage.index),
+            });
+            return {
+              action: "run_group",
+              group: selected,
+              reasoning: "PI advisor selected the next stage group.",
+            };
+          }
+        }
+      } else {
+        throw new Error(result.stderr.trim() || result.stdout.trim() || "pi advisor failed");
+      }
+    } catch (error) {
+      emitLogEvent("orchestrator_fallback", {
+        orchestrator: "pi",
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const group = candidateGroups[0] ?? [];
+    if (
+      this.#followUpQueue[0] !== undefined &&
+      group.length === 1 &&
+      group[0]?.index === this.#nextDynamicIndex
+    ) {
+      this.#followUpQueue.shift();
+      this.#nextDynamicIndex += 1;
+    }
+    emitLogEvent("advisor_assess_end", {
+      action: "run_group",
+      reasoning: "PI advisor fallback selected the next candidate group.",
+      stages: group.map((stage) => stage.index),
+    });
+    return {
+      action: "run_group",
+      group,
+      reasoning: "PI advisor fallback selected the next candidate group.",
     };
   }
 }
@@ -1635,7 +1923,7 @@ function maybeAutoCommit(projectDir: string, enabled: boolean, summary: string):
   });
   try {
     runGit(projectDir, ["add", "-A"]);
-    const message = `kodo: ${summary.replace(/\s+/gu, " ").trim().slice(0, 72)}`;
+    const message = `simple-runner: ${summary.replace(/\s+/gu, " ").trim().slice(0, 72)}`;
     runGit(projectDir, ["commit", "-m", message]);
     emitLogEvent("auto_commit_done", {
       message,
@@ -2590,6 +2878,16 @@ abstract class CliRuntimeOrchestratorBase extends RuntimeOrchestratorBase {
   }
 }
 
+export class PiRuntimeOrchestrator extends RuntimeOrchestratorBase {
+  constructor(model: string) {
+    super("pi", model);
+  }
+
+  protected override createStageAdvisor(plan: GoalPlan): StageAdvisor {
+    return new PiToolStageAdvisor(plan, this.model);
+  }
+}
+
 export class ApiRuntimeOrchestrator extends RuntimeOrchestratorBase {
   constructor(model: string) {
     super("api", model);
@@ -2671,6 +2969,8 @@ export class OpencodeRuntimeOrchestrator extends CliRuntimeOrchestratorBase {
 
 export function buildRuntimeOrchestrator(params: ResolvedRuntimeParams): RuntimeOrchestrator {
   switch (params.orchestrator) {
+    case "pi":
+      return new PiRuntimeOrchestrator(params.orchestratorModel);
     case "api":
       return new ApiRuntimeOrchestrator(params.orchestratorModel);
     case "claude-code":

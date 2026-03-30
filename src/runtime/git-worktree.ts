@@ -9,13 +9,13 @@ import { emit as emitLogEvent } from "../logging/log.js";
 
 const GIT_ENV = {
   GIT_AUTHOR_EMAIL: "noreply@github.com",
-  GIT_AUTHOR_NAME: "kodo",
+  GIT_AUTHOR_NAME: "simple-runner",
   GIT_COMMITTER_EMAIL: "noreply@github.com",
-  GIT_COMMITTER_NAME: "kodo",
+  GIT_COMMITTER_NAME: "simple-runner",
 };
 
 const GIT_TIMEOUT_MS = 60_000;
-const WORKTREE_BRANCH_PREFIX = "kodo-";
+const WORKTREE_BRANCH_PREFIX = "simple-runner-";
 const STALE_WORKTREE_AGE_MS = 6 * 60 * 60 * 1000;
 
 function emitRuntimeLog(event: string, fields: Record<string, unknown>): void {
@@ -246,7 +246,7 @@ export function commitWorktreeChanges(worktreeDir: string, stageName: string): b
   stripPycacheFromIndex(worktreeDir);
   const commit = runGit(
     worktreeDir,
-    ["commit", "-m", `kodo: parallel stage '${stageName}' changes`],
+    ["commit", "-m", `simple-runner: parallel stage '${stageName}' changes`],
     { allowFailure: true },
   );
   return commit.ok;
@@ -296,7 +296,7 @@ export function mergeWorktreeBranch(
   if (
     runGit(projectDir, ["status", "--porcelain"], { allowFailure: true }).output.trim().length > 0
   ) {
-    runGit(projectDir, ["commit", "-m", "kodo: strip __pycache__ before merge"], {
+    runGit(projectDir, ["commit", "-m", "simple-runner: strip __pycache__ before merge"], {
       allowFailure: true,
     });
   }
@@ -312,14 +312,14 @@ export function mergeWorktreeBranch(
   if (
     runGit(projectDir, ["status", "--porcelain"], { allowFailure: true }).output.trim().length > 0
   ) {
-    runGit(projectDir, ["commit", "-m", "kodo: strip __pycache__ from main"], {
+    runGit(projectDir, ["commit", "-m", "simple-runner: strip __pycache__ from main"], {
       allowFailure: true,
     });
   }
 
   const merge = runGit(
     projectDir,
-    ["merge", branchName, "--no-ff", "-m", `Merge kodo parallel stage: ${stageName}`],
+    ["merge", branchName, "--no-ff", "-m", `Merge simple-runner parallel stage: ${stageName}`],
     { allowFailure: true },
   );
   if (!merge.ok) {

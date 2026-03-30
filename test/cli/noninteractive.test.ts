@@ -29,7 +29,7 @@ const API_KEY_ENV_VARS = [
 function makeProjectDir(): string {
   const project = path.join(
     os.tmpdir(),
-    `kodo-ts-noninteractive-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-ts-noninteractive-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(project, { recursive: true });
   return project;
@@ -38,7 +38,7 @@ function makeProjectDir(): string {
 function makeHomeDir(): string {
   const homeDir = path.join(
     os.tmpdir(),
-    `kodo-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
@@ -54,7 +54,7 @@ afterEach(() => {
 
 describe("runCli noninteractive runtime resolution", () => {
   beforeEach(() => {
-    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
     vi.stubEnv("PATH", "");
   });
 
@@ -70,15 +70,15 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(runCli(["--goal-file", goalFile, "--project", project])).toBe(0);
     expect(io.stdout()).toContain("Goal source: goal-file");
     expect(io.stdout()).toContain("Goal: Build an API server");
-    expect(io.stdout()).toContain("Orchestrator: api (gpt-5.4)");
+    expect(io.stdout()).toContain("Orchestrator: pi (gemini-2.5-flash)");
     expect(io.stdout()).toContain("Run ID:");
     expect(io.stdout()).toContain("Log file:");
     expect(io.stdout()).toContain("Run completed.");
 
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "full",
-      orchestrator: "api",
-      orchestratorModel: "gpt-5.4",
+      orchestrator: "pi",
+      orchestratorModel: "gemini-2.5-flash",
       maxExchanges: 30,
       maxCycles: 5,
       autoCommit: true,
@@ -100,22 +100,22 @@ describe("runCli noninteractive runtime resolution", () => {
     }
     const binDir = path.join(homeDir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "gemini"), "");
+    writeFileSync(path.join(binDir, "opencode"), "");
     vi.stubEnv("PATH", binDir);
     const project = makeProjectDir();
     const io = captureOutput();
 
     expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
-    expect(io.stdout()).toContain("Orchestrator: gemini-cli (gemini-3-flash)");
+    expect(io.stdout()).toContain("Orchestrator: pi (gemini-2.5-flash)");
     io.restore();
   });
 
   it("uses user config to disable auto-commit unless the flag overrides it", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
-    mkdirSync(path.join(homeDir, ".kodo"), { recursive: true });
+    mkdirSync(path.join(homeDir, ".simple-runner"), { recursive: true });
     writeFileSync(
-      path.join(homeDir, ".kodo", "config.json"),
+      path.join(homeDir, ".simple-runner", "config.json"),
       `${JSON.stringify({ auto_commit: false })}\n`,
     );
     vi.stubEnv("OPENAI_API_KEY", "test-key");
@@ -142,7 +142,7 @@ describe("runCli noninteractive runtime resolution", () => {
     const io = captureOutput();
 
     expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
-    expect(io.stdout()).toContain("Orchestrator: api (gpt-5.4)");
+    expect(io.stdout()).toContain("Orchestrator: pi (gemini-2.5-flash)");
 
     cwdSpy.mockRestore();
     if (previousOpenAi === undefined) {
@@ -184,13 +184,13 @@ describe("runCli noninteractive runtime resolution", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     const project = makeProjectDir();
-    mkdirSync(path.join(project, ".kodo"), { recursive: true });
+    mkdirSync(path.join(project, ".simple-runner"), { recursive: true });
     writeFileSync(
       projectConfigPath(project),
       `${JSON.stringify({
         team: "quick",
-        orchestrator: "gemini-cli",
-        orchestratorModel: "gemini-3-flash",
+        orchestrator: "pi",
+        orchestratorModel: "gemini-2.5-flash",
         maxExchanges: 18,
         maxCycles: 2,
         autoCommit: false,
@@ -203,7 +203,7 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Previous config found:");
     expect(io.stdout()).toContain("Team: quick");
     expect(io.stdout()).toContain("Mode: default");
-    expect(io.stdout()).toContain("Orchestrator: gemini-cli (gemini-3-flash)");
+    expect(io.stdout()).toContain("Orchestrator: pi (gemini-2.5-flash)");
     expect(io.stdout()).toContain("Auto-commit: disabled");
     expect(io.stdout()).toContain("Run completed.");
     io.restore();
@@ -217,14 +217,14 @@ describe("runCli noninteractive runtime resolution", () => {
     }
     const binDir = path.join(homeDir, "bin");
     mkdirSync(binDir, { recursive: true });
-    writeFileSync(path.join(binDir, "gemini"), "");
+    writeFileSync(path.join(binDir, "opencode"), "");
     vi.stubEnv("PATH", binDir);
     const project = makeProjectDir();
     const io = captureOutput();
 
     expect(runCli(["--goal", "Ship it", "--project", project])).toBe(0);
     expect(io.stdout()).toContain("Team: full");
-    expect(io.stdout()).toContain("Orchestrator: gemini-cli (gemini-3-flash)");
+    expect(io.stdout()).toContain("Orchestrator: pi (gemini-2.5-flash)");
     io.restore();
   });
 
@@ -232,9 +232,9 @@ describe("runCli noninteractive runtime resolution", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
-    mkdirSync(path.join(homeDir, ".kodo", "teams"), { recursive: true });
+    mkdirSync(path.join(homeDir, ".simple-runner", "teams"), { recursive: true });
     writeFileSync(
-      path.join(homeDir, ".kodo", "teams", "full.json"),
+      path.join(homeDir, ".simple-runner", "teams", "full.json"),
       `${JSON.stringify({
         description: "user full",
         agents: {
@@ -248,9 +248,9 @@ describe("runCli noninteractive runtime resolution", () => {
     );
 
     const project = makeProjectDir();
-    mkdirSync(path.join(project, ".kodo"), { recursive: true });
+    mkdirSync(path.join(project, ".simple-runner"), { recursive: true });
     writeFileSync(
-      path.join(project, ".kodo", "team.json"),
+      path.join(project, ".simple-runner", "team.json"),
       `${JSON.stringify({
         description: "project full",
         agents: {
@@ -282,13 +282,13 @@ describe("runCli noninteractive runtime resolution", () => {
     const homeDir = makeHomeDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     const project = makeProjectDir();
-    mkdirSync(path.join(project, ".kodo"), { recursive: true });
+    mkdirSync(path.join(project, ".simple-runner"), { recursive: true });
     writeFileSync(
-      path.join(project, ".kodo", "last-config.json"),
+      path.join(project, ".simple-runner", "last-config.json"),
       `${JSON.stringify({
         mode: "full",
-        orchestrator: "gemini-cli",
-        orchestratorModel: "gemini-3-flash",
+        orchestrator: "pi",
+        orchestratorModel: "gemini-2.5-flash",
         maxExchanges: 30,
         maxCycles: 5,
       })}\n`,
@@ -299,8 +299,8 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(runCli(["--project", project])).toBe(0);
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "full",
-      orchestrator: "gemini-cli",
-      orchestratorModel: "gemini-3-flash",
+      orchestrator: "pi",
+      orchestratorModel: "gemini-2.5-flash",
       maxExchanges: 30,
       maxCycles: 5,
     });
@@ -315,8 +315,8 @@ describe("runCli noninteractive runtime resolution", () => {
     setPromptAdapter(
       scriptedPrompts([
         "quick — No verifiers — orchestrator is the quality gate",
-        "api",
-        "gpt-5.4",
+        "pi",
+        "gemini-2.5-flash",
         "12",
         "3",
         "high",
@@ -332,8 +332,8 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(io.stdout()).toContain("Run completed.");
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
       team: "quick",
-      orchestrator: "api",
-      orchestratorModel: "gpt-5.4",
+      orchestrator: "pi",
+      orchestratorModel: "gemini-2.5-flash",
       maxExchanges: 12,
       maxCycles: 3,
       autoCommit: true,
@@ -347,13 +347,13 @@ describe("runCli noninteractive runtime resolution", () => {
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
-    mkdirSync(path.join(project, ".kodo"), { recursive: true });
+    mkdirSync(path.join(project, ".simple-runner"), { recursive: true });
     writeFileSync(
       projectConfigPath(project),
       `${JSON.stringify({
         team: "full",
-        orchestrator: "api",
-        orchestratorModel: "gpt-5.4",
+        orchestrator: "pi",
+        orchestratorModel: "gemini-2.5-flash",
         maxExchanges: 30,
         maxCycles: 5,
         autoCommit: true,
@@ -382,7 +382,7 @@ describe("runCli noninteractive runtime resolution", () => {
     expect(run).not.toBeNull();
     expect(run?.goal).toBe("Ship the CLI");
     expect(run?.projectDir).toBe(project);
-    expect(run?.orchestrator).toBe("api");
+    expect(run?.orchestrator).toBe("pi");
     expect(run?.finished).toBe(true);
     io.restore();
   });
@@ -396,8 +396,8 @@ describe("runCli noninteractive runtime resolution", () => {
     setPromptAdapter(
       scriptedPrompts([
         "full — built-in team",
-        "api",
-        "gpt-5.4",
+        "pi",
+        "gemini-2.5-flash",
         "30",
         "5",
         "standard",
@@ -424,8 +424,8 @@ describe("runCli noninteractive runtime resolution", () => {
     setPromptAdapter(
       scriptedPrompts([
         "full — built-in team",
-        "api",
-        "gpt-5.4",
+        "pi",
+        "gemini-2.5-flash",
         "30",
         "5",
         "standard",
@@ -446,11 +446,14 @@ describe("runCli noninteractive runtime resolution", () => {
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const project = makeProjectDir();
-    mkdirSync(path.join(project, ".kodo", "intake"), { recursive: true });
+    mkdirSync(path.join(project, ".simple-runner", "intake"), { recursive: true });
     writeFileSync(path.join(project, "goal.md"), "Refactor the auth flow\n");
-    writeFileSync(path.join(project, ".kodo", "intake", "goal.md"), "Refactor the auth flow\n");
     writeFileSync(
-      path.join(project, ".kodo", "intake", "goal-plan.json"),
+      path.join(project, ".simple-runner", "intake", "goal.md"),
+      "Refactor the auth flow\n",
+    );
+    writeFileSync(
+      path.join(project, ".simple-runner", "intake", "goal-plan.json"),
       `${JSON.stringify({
         context: "Auth flow context",
         stages: [
@@ -564,7 +567,8 @@ describe("runCli noninteractive runtime resolution", () => {
     setPromptAdapter(
       scriptedPrompts([
         "quick — No verifiers — orchestrator is the quality gate",
-        "api",
+        "pi",
+        "(custom)",
         "ollama:qwen2.5-coder:14b",
         "12",
         "3",
@@ -577,7 +581,7 @@ describe("runCli noninteractive runtime resolution", () => {
 
     expect(runCli(["--project", project])).toBe(0);
     expect(JSON.parse(readFileSync(projectConfigPath(project), "utf8"))).toMatchObject({
-      orchestrator: "api",
+      orchestrator: "pi",
       orchestratorModel: "ollama:qwen2.5-coder:14b",
     });
     io.restore();

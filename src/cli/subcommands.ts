@@ -35,7 +35,7 @@ import type { TopLevelSubcommand } from "./types.js";
 import { printLines, writeStderr } from "./ui.js";
 
 const TEAM_HELP = [
-  "Usage: kodo teams [add <name> | edit <name> | auto [mode]]",
+  "Usage: simple-runner teams [add <name> | edit <name> | auto [mode]]",
   "",
   "  (no args)   List all available teams",
   "  add <name>  Create a new team configuration",
@@ -82,7 +82,7 @@ function parseLogsArgs(args: string[]): { logfile: string | null; port: number }
     }
     if (token === "--help" || token === "-h") {
       printLines([
-        "Usage: kodo logs [logfile] [--port PORT]",
+        "Usage: simple-runner logs [logfile] [--port PORT]",
         "",
         "Open or inspect run logs for the local viewer.",
       ]);
@@ -113,7 +113,7 @@ function parseIssueArgs(args: string[]): {
     const token = args[index];
     if (token === "--help" || token === "-h") {
       printLines([
-        "Usage: kodo issue [run_id] [--project PROJECT] [--no-open]",
+        "Usage: simple-runner issue [run_id] [--project PROJECT] [--no-open]",
         "",
         "Create a GitHub issue URL for a selected run.",
       ]);
@@ -147,7 +147,7 @@ function parseIssueArgs(args: string[]): {
 function launchViewerServer(port: number, logFile: string | null): string {
   if (port <= 0) {
     throw new CliError(
-      "kodo logs --port must be a positive integer when launching HTTP viewer mode.",
+      "simple-runner logs --port must be a positive integer when launching HTTP viewer mode.",
     );
   }
   if (!commandOnPath("npx")) {
@@ -170,7 +170,7 @@ function launchViewerServer(port: number, logFile: string | null): string {
       stdio: "ignore",
       env: {
         ...process.env,
-        KODO_NO_VIEWER: "1",
+        SIMPLE_RUNNER_NO_VIEWER: "1",
       },
     });
     detached.unref();
@@ -184,7 +184,7 @@ function launchViewerServer(port: number, logFile: string | null): string {
 }
 
 function openTarget(target: string): boolean {
-  if (process.env.KODO_NO_VIEWER || process.env.CI || process.env.VITEST) {
+  if (process.env.SIMPLE_RUNNER_NO_VIEWER || process.env.CI || process.env.VITEST) {
     return false;
   }
 
@@ -261,7 +261,7 @@ function listTeams(homeDir = os.homedir()): void {
 
   if (hasMissing) {
     printLines([
-      "Hint: Run 'kodo teams auto' to generate teams adapted to your installed backends.",
+      "Hint: Run 'simple-runner teams auto' to generate teams adapted to your installed backends.",
       "",
     ]);
   }
@@ -431,7 +431,7 @@ function addTeam(name: string, homeDir = os.homedir()): void {
   const existing = getTeamByName(name, homeDir);
   if (existing?.source === "user") {
     throw new CliError(
-      `Team '${name}' already exists at ${existing.path}\nUse 'kodo teams edit ${name}' to modify it.`,
+      `Team '${name}' already exists at ${existing.path}\nUse 'simple-runner teams edit ${name}' to modify it.`,
     );
   }
 
@@ -654,13 +654,13 @@ function autoTeam(modeName: string, homeDir = os.homedir()): void {
   }
 
   saveTeamConfig(modeName, config, homeDir);
-  printLines([`Saved to ${destination}`, "", `Use with: kodo --team ${modeName}`]);
+  printLines([`Saved to ${destination}`, "", `Use with: simple-runner --team ${modeName}`]);
 }
 
 function listRunsSubcommand(args: string[], homeDir = os.homedir()): void {
   if (args.includes("--help") || args.includes("-h")) {
     printLines([
-      "Usage: kodo runs [project_dir]",
+      "Usage: simple-runner runs [project_dir]",
       "",
       "List all known runs, optionally filtered to a project directory.",
     ]);
@@ -694,7 +694,7 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
     return;
   }
 
-  const openBrowser = !process.env.KODO_NO_VIEWER;
+  const openBrowser = !process.env.SIMPLE_RUNNER_NO_VIEWER;
   if (parsed.logfile !== null) {
     const resolved = path.resolve(parsed.logfile);
     if (!resolved.endsWith(".jsonl")) {
@@ -713,7 +713,7 @@ function showLogsSubcommand(args: string[], homeDir = os.homedir()): void {
 
   const runs = listRuns(undefined, homeDir);
   if (runs.length === 0) {
-    throw new CliError("No runs found. Specify a log file or run kodo first.");
+    throw new CliError("No runs found. Specify a log file or run simple-runner first.");
   }
 
   const selected = pickRun(runs, "Select run for logs:");
@@ -791,8 +791,8 @@ function updateSubcommand(): number {
     throw new CliError("uv is required for updating. Install it: https://docs.astral.sh/uv/");
   }
 
-  printLines(["Updating kodo..."]);
-  const result = spawnSync("uv", ["tool", "upgrade", "kodo", "--reinstall"], {
+  printLines(["Updating simple-runner..."]);
+  const result = spawnSync("uv", ["tool", "upgrade", "simple-runner", "--reinstall"], {
     stdio: "inherit",
   });
   if (result.error) {
@@ -800,7 +800,7 @@ function updateSubcommand(): number {
   }
   if ((result.status ?? 1) !== 0) {
     writeStderr(
-      "Update failed. Fix the uv/tooling error above, then rerun: uv tool upgrade kodo --reinstall\n",
+      "Update failed. Fix the uv/tooling error above, then rerun: uv tool upgrade simple-runner --reinstall\n",
     );
   }
   return result.status ?? 1;
@@ -825,7 +825,7 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
     throw new CliError(
       parsed.runId !== null
         ? `Run not found: ${parsed.runId}`
-        : "No runs found. Specify a run ID or run kodo first.",
+        : "No runs found. Specify a run ID or run simple-runner first.",
     );
   }
 
@@ -844,7 +844,7 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
     `**Run:** ${selected.runId}`,
     `**Goal:** ${selected.goal.slice(0, 500)}${selected.goal.length > 500 ? "..." : ""}`,
     `**Status:** ${status}`,
-    `**kodo:** ${VERSION}`,
+    `**simple-runner:** ${VERSION}`,
     "",
     ...(description.trim().length === 0 ? [] : [description.trim(), ""]),
     "---",
@@ -860,7 +860,7 @@ function issueSubcommand(args: string[], homeDir = os.homedir()): void {
     .filter((line) => line.length > 0)
     .join("\n");
 
-  const url = `https://github.com/ikamensh/kodo/issues/new?title=${encodeURIComponent(`Bug report: run ${selected.runId}`)}&body=${encodeURIComponent(body)}`;
+  const url = `https://github.com/arcqdev/simple-runner/issues/new?title=${encodeURIComponent(`Bug report: run ${selected.runId}`)}&body=${encodeURIComponent(body)}`;
   const folderOpened = !parsed.noOpen && openFolder(runDir);
   const browserOpened = !parsed.noOpen && openTarget(url);
 
@@ -938,11 +938,11 @@ export function handleSubcommand(command: TopLevelSubcommand, args: string[]): n
 
       const [subcommand, maybeName] = args;
       if ((subcommand === "add" || subcommand === "edit") && !maybeName) {
-        throw new CliError(`Usage: kodo teams ${subcommand} <name>`);
+        throw new CliError(`Usage: simple-runner teams ${subcommand} <name>`);
       }
       if (subcommand !== "add" && subcommand !== "edit" && subcommand !== "auto") {
         throw new CliError(
-          `Unknown teams subcommand: ${subcommand}\nUsage: kodo teams [add <name> | edit <name> | auto [mode]]`,
+          `Unknown teams subcommand: ${subcommand}\nUsage: simple-runner teams [add <name> | edit <name> | auto [mode]]`,
         );
       }
 

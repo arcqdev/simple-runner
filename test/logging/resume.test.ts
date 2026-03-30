@@ -10,7 +10,7 @@ import { resumeRun } from "../../src/runtime/engine.js";
 function makeTempDir(label: string): string {
   const directory = path.join(
     os.tmpdir(),
-    `kodo-resume-test-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-resume-test-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(directory, { recursive: true });
   return directory;
@@ -27,7 +27,7 @@ afterEach(() => {
 describe("resume logging flow", () => {
   it("finds an interrupted run and completes it through resumeRun", () => {
     const homeDir = makeTempDir("home");
-    const runsDir = path.join(homeDir, ".kodo", "runs");
+    const runsDir = path.join(homeDir, ".simple-runner", "runs");
     const runId = "interrupted_run";
     const runDir = path.join(runsDir, runId);
     const projectDir = makeTempDir("project");
@@ -98,8 +98,8 @@ describe("resume logging flow", () => {
       "utf8",
     );
 
-    vi.stubEnv("KODO_RUNS_DIR", runsDir);
-    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("SIMPLE_RUNNER_RUNS_DIR", runsDir);
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
 
     const incomplete = findIncompleteRuns(projectDir, homeDir);
     expect(incomplete).toHaveLength(1);

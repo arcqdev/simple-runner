@@ -9,7 +9,7 @@ import { ensureDirectory, isSubPath, resolveExistingPath, safeJoin } from "../..
 function makeTempDir(): string {
   const directory = path.join(
     os.tmpdir(),
-    `kodo-runtime-fs-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-runtime-fs-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(directory, { recursive: true });
   return directory;

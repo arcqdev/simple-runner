@@ -18,7 +18,7 @@ import { parseRun } from "../../src/logging/runs.js";
 function makeTempDir(): string {
   const directory = path.join(
     os.tmpdir(),
-    `kodo-log-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-log-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(directory, { recursive: true });
   return directory;

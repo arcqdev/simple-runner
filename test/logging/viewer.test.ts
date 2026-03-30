@@ -11,7 +11,7 @@ import { captureOutput } from "../helpers/stdout.js";
 function makeTempDir(): string {
   const directory = path.join(
     os.tmpdir(),
-    `kodo-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-viewer-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(directory, { recursive: true });
   return directory;
@@ -48,7 +48,7 @@ describe("viewer", () => {
     const htmlPath = new URL(url).pathname;
     expect(existsSync(htmlPath)).toBe(true);
     const html = readFileSync(htmlPath, "utf8");
-    expect(html).toContain("kodo log viewer");
+    expect(html).toContain("simple-runner log viewer");
     expect(html).toContain("run_start");
     expect(html).toContain("cycle_end");
     expect(html).not.toContain("not-json");
@@ -99,7 +99,7 @@ describe("viewer", () => {
   it("shows trace-upload affordances only when enabled", () => {
     const homeDir = makeTempDir();
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
-    vi.stubEnv("KODO_TRACE_UPLOAD", "1");
+    vi.stubEnv("SIMPLE_RUNNER_TRACE_UPLOAD", "1");
 
     const enabledUrl = openViewer(null, { openBrowser: false });
     const enabledHtml = readFileSync(new URL(enabledUrl).pathname, "utf8");
@@ -143,7 +143,7 @@ describe("viewer", () => {
     const io = captureOutput();
 
     await expect(runViewerCli(["--help"])).resolves.toBe(0);
-    expect(io.stdout()).toContain("Usage: kodo-viewer");
+    expect(io.stdout()).toContain("Usage: simple-runner-viewer");
     io.restore();
   });
 

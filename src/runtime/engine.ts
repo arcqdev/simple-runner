@@ -135,13 +135,17 @@ function configuredBackends(
 }
 
 function shouldUseSessionRuntime(): boolean {
-  if (process.env.KODO_ENABLE_SESSION_RUNTIME === "1") {
+  if (process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME === "1") {
     return true;
   }
   if (process.env.VITEST) {
     return false;
   }
   return true;
+}
+
+function canRunNativeOrchestrator(orchestrator: string): boolean {
+  return orchestrator === "pi";
 }
 
 function syntheticExecutionResult(
@@ -272,13 +276,13 @@ export function executePendingRun(
     const sessionBackend = backendForOrchestrator(params.orchestrator);
     if (
       !shouldUseSessionRuntime() ||
-      process.env.KODO_ENABLE_SESSION_RUNTIME === "0" ||
-      sessionBackend === null ||
-      !availableBackends()[sessionBackend]
+      process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME === "0" ||
+      (sessionBackend === null && !canRunNativeOrchestrator(params.orchestrator)) ||
+      (sessionBackend !== null && !availableBackends()[sessionBackend])
     ) {
       const reason = !shouldUseSessionRuntime()
         ? "Session runtime disabled for this environment"
-        : process.env.KODO_ENABLE_SESSION_RUNTIME === "0"
+        : process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME === "0"
           ? "Session runtime explicitly disabled"
           : sessionBackend === null
             ? `No session adapter for orchestrator ${params.orchestrator}`
@@ -320,7 +324,7 @@ export function executePendingRun(
     }
 
     emitLogEvent("trace_upload_start", {
-      enabled: process.env.KODO_TRACE_UPLOAD ?? "",
+      enabled: process.env.SIMPLE_RUNNER_TRACE_UPLOAD ?? "",
       run_id: runDir.runId,
     });
     try {

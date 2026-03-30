@@ -49,7 +49,7 @@ describe("git worktree helpers", () => {
     initGitRepo(projectDir);
 
     const worktree = createWorktree(projectDir, "stage/@ 2");
-    expect(worktree.branchName).toMatch(/^kodo-stage_2-[0-9a-f]{8}$/u);
+    expect(worktree.branchName).toMatch(/^simple-runner-stage_2-[0-9a-f]{8}$/u);
     expect(existsSync(worktree.worktreeDir)).toBe(true);
 
     writeFileSync(path.join(worktree.worktreeDir, "isolated.txt"), "hello\n", "utf8");
@@ -69,7 +69,7 @@ describe("git worktree helpers", () => {
 
     expect(commitWorktreeChanges(worktree.worktreeDir, "Commit Stage")).toBe(true);
     expect(runGit(worktree.worktreeDir, ["log", "-1", "--pretty=%s"])).toContain(
-      "kodo: parallel stage 'Commit Stage' changes",
+      "simple-runner: parallel stage 'Commit Stage' changes",
     );
 
     removeWorktree(projectDir, worktree.worktreeDir, worktree.branchName);

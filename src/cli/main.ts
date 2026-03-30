@@ -49,12 +49,12 @@ import type { ParsedMain } from "./types.js";
 import { emitJson, printLines, setProgressOutput, writeStderr } from "./ui.js";
 
 const HELP_TEXT = [
-  "usage: kodo [-h] [--version] [--resume [RUN_ID]] [--goal GOAL | --goal-file GOAL_FILE | --improve | --test | --fix-from RUN_ID]",
+  "usage: simple-runner [-h] [--version] [--resume [RUN_ID]] [--goal GOAL | --goal-file GOAL_FILE | --improve | --test | --fix-from RUN_ID]",
   "            [--focus FOCUS] [--target TARGET] [--team TEAM] [--exchanges EXCHANGES] [--cycles CYCLES]",
   "            [--orchestrator ORCHESTRATOR] [--skip-intake] [--auto-refine] [--json] [--yes]",
   "            [--effort {low,standard,high,max}] [--no-auto-commit] [--debug] [--project PROJECT]",
   "",
-  "kodo - autonomous multi-agent coding",
+  "simple-runner - autonomous multi-agent coding",
   "",
   "options:",
   "  -h, --help            show this help message and exit",
@@ -85,14 +85,14 @@ const HELP_TEXT = [
   "  --project PROJECT     Project directory (default: current directory).",
   "",
   "subcommands:",
-  "  kodo test      Find bugs through realistic testing",
-  "  kodo improve   Code review: simplification, usability, architecture",
-  "  kodo runs      List all known runs",
-  "  kodo logs      Open log viewer in browser",
-  "  kodo issue     Report a bug (opens GitHub with run context)",
-  "  kodo backends  List available backends and API keys",
-  "  kodo teams     List, add, or edit team configurations",
-  "  kodo update    Update kodo to the latest version",
+  "  simple-runner test      Find bugs through realistic testing",
+  "  simple-runner improve   Code review: simplification, usability, architecture",
+  "  simple-runner runs      List all known runs",
+  "  simple-runner logs      Open log viewer in browser",
+  "  simple-runner issue     Report a bug (opens GitHub with run context)",
+  "  simple-runner backends  List available backends and API keys",
+  "  simple-runner teams     List, add, or edit team configurations",
+  "  simple-runner update    Update simple-runner to the latest version",
 ];
 
 function printHelp(): void {
@@ -100,14 +100,13 @@ function printHelp(): void {
 }
 
 function printVersion(): void {
-  printLines([`kodo ${VERSION}`]);
+  printLines([`simple-runner ${VERSION}`]);
 }
 
 function printBanner(projectDir: string): void {
   printLines([
     "",
-    `  kodo v${VERSION} - autonomous multi-agent coding`,
-    "  https://github.com/ikamensh/kodo",
+    `  simple-runner v${VERSION} - autonomous multi-agent coding`,
     "",
     `  Project: ${projectDir}`,
   ]);
@@ -158,7 +157,7 @@ function resolveInteractiveGoal(projectDir: string): ResolvedGoal {
 }
 
 function printNextSteps(runDir: RunDir, goal: ResolvedGoal): void {
-  const lines = ["", `  View run: kodo-viewer ${runDir.logFile}`];
+  const lines = ["", `  View run: simple-runner-viewer ${runDir.logFile}`];
   if (goal.source === "improve" && existsSync(path.join(runDir.root, "improve-report.md"))) {
     lines.push(`  Improve report: ${path.join(runDir.root, "improve-report.md")}`);
   }
@@ -169,7 +168,7 @@ function printNextSteps(runDir: RunDir, goal: ResolvedGoal): void {
     lines.push(`  Test report: ${path.join(runDir.root, "test-report.md")}`);
   }
   if (goal.source === "improve" || goal.source === "test" || goal.source === "fix-from") {
-    lines.push(`  Fix follow-ups: kodo --fix-from ${runDir.runId}`);
+    lines.push(`  Fix follow-ups: simple-runner --fix-from ${runDir.runId}`);
   }
   printLines(lines);
 }
@@ -194,7 +193,7 @@ function resolveFixFromGoal(parsed: ParsedMain): ResolvedGoal {
     return {
       goalText: normalizeGoalText(
         [
-          `Fix these findings from a previous kodo run (${runId}):`,
+          `Fix these findings from a previous simple-runner run (${runId}):`,
           "",
           findings.join("\n"),
           "",
@@ -372,7 +371,7 @@ function resolveTeamConfigForLaunch(
         `Team '${teamName}' could not be built: ${message}\nThis usually means the configured worker backends are unavailable.\n`,
       );
       const confirmed = getPromptAdapter().confirm(
-        "Run 'kodo teams auto' and retry with a generated working team?",
+        "Run 'simple-runner teams auto' and retry with a generated working team?",
         true,
       );
       if (confirmed === null) {
@@ -474,7 +473,7 @@ function summarizeReport(
         `  Auto-fixed:     ${autoFixed}`,
         `  Needs decision: ${needsDecision}`,
         ...(needsDecision > 0
-          ? ["", "  To fix 'needs decision' items:", `    kodo --fix-from ${runDir.runId}`]
+          ? ["", "  To fix 'needs decision' items:", `    simple-runner --fix-from ${runDir.runId}`]
           : []),
       ]);
     }
@@ -511,7 +510,7 @@ function summarizeReport(
         ...(summary.blocked_count > 0 ? [`  Blocked:          ${summary.blocked_count}`] : []),
         ...summary.blocked_details.map((detail) => `    ${detail}`),
         ...(fixable > 0
-          ? ["", "  To fix these findings:", `    kodo --fix-from ${runDir.runId}`]
+          ? ["", "  To fix these findings:", `    simple-runner --fix-from ${runDir.runId}`]
           : []),
       ]);
     }
@@ -719,7 +718,7 @@ export function runCli(argv = process.argv.slice(2)): number {
           `Log file: ${run.logFile}`,
           `Summary: ${result.summary}`,
         ]);
-        printLines(["", `  View run: kodo-viewer ${run.logFile}`]);
+        printLines(["", `  View run: simple-runner-viewer ${run.logFile}`]);
       }
       return 0;
     }

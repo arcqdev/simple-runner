@@ -14,7 +14,7 @@ import { captureOutput } from "../helpers/stdout.js";
 function makeProjectDir(): string {
   const project = path.join(
     os.tmpdir(),
-    `kodo-ts-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-ts-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(project, { recursive: true });
   return project;
@@ -29,7 +29,7 @@ afterEach(() => {
 
 describe("runCli main shell", () => {
   beforeEach(() => {
-    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
     vi.stubEnv("PATH", "");
   });
 
@@ -38,7 +38,7 @@ describe("runCli main shell", () => {
 
     expect(runCli([])).toBe(0);
 
-    expect(io.stdout()).toContain("usage: kodo");
+    expect(io.stdout()).toContain("usage: simple-runner");
     expect(io.stdout()).toContain("subcommands:");
     io.restore();
   });
@@ -47,13 +47,13 @@ describe("runCli main shell", () => {
     const io = captureOutput();
 
     expect(runCli(["--version"])).toBe(0);
-    expect(io.stdout()).toBe("kodo 0.4.261\n");
+    expect(io.stdout()).toBe("simple-runner 0.4.261\n");
     io.restore();
   });
 
   it("rewrites the test alias into the main parser", () => {
     const project = makeProjectDir();
-    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
     const io = captureOutput();
 
     expect(runCli(["test", "--project", project])).toBe(0);
@@ -106,7 +106,7 @@ describe("runCli main shell", () => {
 
   it("accepts a valid --test target and summarizes the invocation", () => {
     const project = makeProjectDir();
-    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
     const target = path.join(project, "src");
     mkdirSync(target);
     writeFileSync(path.join(target, "index.ts"), "export {};\n");
@@ -189,7 +189,7 @@ describe("runCli main shell", () => {
         "",
         "## Findings",
         "- **F1:** CLI crashes on empty config",
-        "  - **Workflow:** `kodo test` with missing team config",
+        "  - **Workflow:** `simple-runner test` with missing team config",
         "  - **Severity:** critical",
         "",
       ].join("\n"),
@@ -207,7 +207,7 @@ describe("runCli main shell", () => {
 
   it("emits report content in JSON mode for specialized runs", () => {
     const project = makeProjectDir();
-    vi.stubEnv("KODO_ENABLE_SESSION_RUNTIME", "0");
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
     const io = captureOutput();
 
     expect(runCli(["--test", "--project", project, "--json"])).toBe(0);

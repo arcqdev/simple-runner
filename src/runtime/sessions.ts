@@ -177,7 +177,7 @@ function runQueryHelper(payload: {
   timeoutS?: number;
 }): HelperQueryOutput {
   const startedAt = Date.now();
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-helper-"));
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "simple-runner-helper-"));
   const payloadPath = writeTempJson(tempDir, "payload.json", payload);
   const outputPath = path.join(tempDir, "result.json");
   const helper = spawnSync(process.execPath, [queryHelperPath(), payloadPath, outputPath], {
@@ -482,7 +482,7 @@ export function querySessionsInParallel(requests: ParallelSessionRequest[]): Ses
     return requests.map((request) => request.session.query(request.prompt, request.options));
   }
 
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), "kodo-parallel-"));
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "simple-runner-parallel-"));
   try {
     const helperRequests = requests.map((request) => {
       const session = request.session as AcpSession;

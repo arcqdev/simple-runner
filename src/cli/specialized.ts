@@ -17,7 +17,7 @@ export const IMPROVE_REPORT_FORMAT = `\`\`\`markdown
 - <finding title> — <reason>
 \`\`\``;
 
-export const IMPROVE_GOAL = `Review this codebase for significant improvements. Focus on simplification, usability, and architecture — not on running tests or finding runtime bugs (use \`kodo test\` for that).
+export const IMPROVE_GOAL = `Review this codebase for significant improvements. Focus on simplification, usability, and architecture — not on running tests or finding runtime bugs (use \`simple-runner test\` for that).
 
 Look for things a senior developer joining the project would notice: unnecessary complexity, confusing interfaces, duplicated concepts, missing abstractions, poor defaults. Be ambitious — propose changes that meaningfully improve the experience of working with or using this software.
 
@@ -25,7 +25,7 @@ Report at \`{report_path}\`.
 
 {report_format}
 
-Commit auto-fixes: "chore: auto-fix issues found by kodo improve".`;
+Commit auto-fixes: "chore: auto-fix issues found by simple-runner improve".`;
 
 export const TEST_REPORT_FORMAT = `\`\`\`markdown
 # Test Report
@@ -317,7 +317,7 @@ export function buildImproveFallbackPlan(
       {
         index: 5,
         name: "Fix & Report",
-        description: `Act only on \`fix\` and \`needs-decision\` from \`${triagePath}\`. Ignore \`skip\`.\n\nOriginal findings: \`${simplificationFindings}\`, \`${usabilityFindings}\`, \`${architectureFindings}\`.\n\nAuto-fix safe issues, flag ambiguous ones. Write report to \`${reportPath}\`:\n\n${IMPROVE_REPORT_FORMAT}\n\nCommit auto-fixes: "chore: auto-fix issues found by kodo improve".`,
+        description: `Act only on \`fix\` and \`needs-decision\` from \`${triagePath}\`. Ignore \`skip\`.\n\nOriginal findings: \`${simplificationFindings}\`, \`${usabilityFindings}\`, \`${architectureFindings}\`.\n\nAuto-fix safe issues, flag ambiguous ones. Write report to \`${reportPath}\`:\n\n${IMPROVE_REPORT_FORMAT}\n\nCommit auto-fixes: "chore: auto-fix issues found by simple-runner improve".`,
         acceptance_criteria: `Report at ${reportPath}. Auto-fixes committed. Only triage-approved findings acted on.`,
         verification: "full",
       },
@@ -358,7 +358,7 @@ export function buildTestFallbackPlan(
         description:
           "Build whatever you need to actually use the software: install scripts, CLI wrappers, test fixtures, sample data. The goal is to interact with it like a real user.\n\nIf you need something you can't build (Docker, browser, GPU), say so in the Blocked Workflows section.\n\nMap all user-facing features and workflows:\n\nRead the README, run --help, check examples and docs. What can a user actually do with this software? What are the documented workflows?\n\nWrite feature coverage to `" +
           coverageFile +
-          "`:\n# Feature Coverage\n\nTracked across `kodo test` runs.\n\n| Feature / Workflow | Last tested | Status | Findings |\n|--------------------|-------------|--------|----------|\n\nInstall the software following the documented steps. Write discovery notes (features found, what existing tests cover, what's most likely to break) to `" +
+          "`:\n# Feature Coverage\n\nTracked across `simple-runner test` runs.\n\n| Feature / Workflow | Last tested | Status | Findings |\n|--------------------|-------------|--------|----------|\n\nInstall the software following the documented steps. Write discovery notes (features found, what existing tests cover, what's most likely to break) to `" +
           reconPath +
           "`.\n\nSpend no more than 15% of total effort here. Get the software running, then start testing.",
         acceptance_criteria: `Software installed and running. Feature map in ${coverageFile}. Discovery notes at ${reconPath}.`,
@@ -409,7 +409,7 @@ export function buildTestFallbackPlan(
         index: 4,
         name: "Triage & Regression Tests",
         persist_changes: true,
-        description: `For each confirmed bug from \`${findingsWorkflows}\` and \`${findingsEdgeCases}\`:\n1. Write a test that reproduces the bug — verify it fails\n2. Fix the code\n3. Verify the test now passes\n\nCommit test and fix separately:\n- "test: add regression test for F<n> (kodo test)"\n- "fix: <description> (kodo test)"\n\nUpdate feature coverage in \`${coverageFile}\`. Run the full test suite.\n\nWrite report to \`${reportPath}\`:\n\n${TEST_REPORT_FORMAT}`,
+        description: `For each confirmed bug from \`${findingsWorkflows}\` and \`${findingsEdgeCases}\`:\n1. Write a test that reproduces the bug — verify it fails\n2. Fix the code\n3. Verify the test now passes\n\nCommit test and fix separately:\n- "test: add regression test for F<n> (simple-runner test)"\n- "fix: <description> (simple-runner test)"\n\nUpdate feature coverage in \`${coverageFile}\`. Run the full test suite.\n\nWrite report to \`${reportPath}\`:\n\n${TEST_REPORT_FORMAT}`,
         acceptance_criteria: `Report at ${reportPath} with findings, feature coverage, and self-critique. Regression tests committed. Suite passes.`,
         verification: "full",
       },

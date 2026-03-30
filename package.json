@@ -1,17 +1,17 @@
 {
-  "name": "kodo",
+  "name": "simple-runner",
   "version": "0.4.261",
   "private": true,
   "bin": {
-    "kodo": "./dist/cli.js",
-    "kodo-viewer": "./dist/viewer-cli.js"
+    "simple-runner": "./dist/cli.js",
+    "simple-runner-viewer": "./dist/viewer-cli.js"
   },
   "type": "module",
   "scripts": {
     "build": "vite build && chmod +x dist/cli.js dist/viewer-cli.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
     "dev": "vite-node src/cli.ts",
-    "e2e:docker": "docker build -f e2e/docker/Dockerfile -t kodo-simple-e2e . && docker run --rm kodo-simple-e2e",
+    "e2e:docker": "docker build -f e2e/docker/Dockerfile -t simple-runner-e2e . && docker run --rm simple-runner-e2e",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "ops:analyze-run": "vite-node scripts/analyze-run.ts",

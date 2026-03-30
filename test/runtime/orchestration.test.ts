@@ -12,6 +12,8 @@ import {
   buildRuntimeOrchestrator,
   GeminiCliRuntimeOrchestrator,
   OpencodeRuntimeOrchestrator,
+  PiRuntimeOrchestrator,
+  PiToolStageAdvisor,
   parseDoneDirective,
   verificationPassed,
 } from "../../src/runtime/orchestration.js";
@@ -123,9 +125,12 @@ describe("orchestration helpers", () => {
     expect(verificationPassed("Found regressions.")).toBe(false);
   });
 
-  it("builds ACP runtime orchestrators for API, Gemini, and OpenCode", () => {
+  it("builds runtime orchestrators for API, PI, Gemini, and OpenCode", () => {
     expect(buildRuntimeOrchestrator(buildParams("api", "gpt-5.4"))).toBeInstanceOf(
       ApiRuntimeOrchestrator,
+    );
+    expect(buildRuntimeOrchestrator(buildParams("pi", "gemini-2.5-flash"))).toBeInstanceOf(
+      PiRuntimeOrchestrator,
     );
     expect(buildRuntimeOrchestrator(buildParams("gemini-cli", "gemini-3-flash"))).toBeInstanceOf(
       GeminiCliRuntimeOrchestrator,
@@ -246,5 +251,37 @@ describe("API tool advisor", () => {
       reasoning: "API advisor marked the goal complete.",
       summary: "all stages are complete",
     });
+  });
+});
+
+describe("PI tool advisor", () => {
+  it("selects the stage group returned by the implement_goal tool call", () => {
+    initTempRun("pi_tool_select");
+    const advisor = new PiToolStageAdvisor(
+      {
+        context: "Test plan",
+        stages: [
+          { description: "First", index: 1, name: "Stage 1" },
+          { description: "Second", index: 2, name: "Stage 2" },
+        ],
+      },
+      "gemini-2.5-flash",
+      {
+        runPi: () => ({
+          exitCode: 0,
+          stderr: "",
+          stdout: "Selected stages: [2]",
+          toolOutput: JSON.stringify({ reasoning: "Stage 2 is next", stageIndexes: [2] }),
+        }),
+      },
+    );
+
+    const decision = advisor.assess("Ship it", ["Completed stage 1"], [1], makeTempDir("project"));
+
+    expect(decision.action).toBe("run_group");
+    if (decision.action === "run_group") {
+      expect(decision.group.map((stage) => stage.index)).toEqual([2]);
+      expect(decision.reasoning).toContain("PI advisor selected");
+    }
   });
 });

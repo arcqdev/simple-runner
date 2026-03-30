@@ -14,7 +14,7 @@ type RunFixtureOptions = {
 export function makeRunsHome(): string {
   const homeDir = path.join(
     os.tmpdir(),
-    `kodo-runs-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-runs-home-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(homeDir, { recursive: true });
   return homeDir;
@@ -24,7 +24,7 @@ export function writeRunFixture(homeDir: string, options: RunFixtureOptions): st
   const projectDir = path.resolve(options.projectDir ?? path.join(homeDir, "project"));
   mkdirSync(projectDir, { recursive: true });
 
-  const runDir = path.join(homeDir, ".kodo", "runs", options.runId);
+  const runDir = path.join(homeDir, ".simple-runner", "runs", options.runId);
   mkdirSync(runDir, { recursive: true });
 
   const events: Array<Record<string, unknown>> = [

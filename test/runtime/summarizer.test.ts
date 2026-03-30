@@ -9,7 +9,7 @@ function envWithoutSummaryKeys(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env.GEMINI_API_KEY;
   delete env.GOOGLE_API_KEY;
-  delete env.KODO_SUMMARIZER_BACKEND;
+  delete env.SIMPLE_RUNNER_SUMMARIZER_BACKEND;
   return env;
 }
 
@@ -119,7 +119,7 @@ describe("async summarizer", () => {
       env: {
         ...envWithoutSummaryKeys(),
         GOOGLE_API_KEY: "google-key",
-        KODO_SUMMARIZER_BACKEND: "ollama:llama3.3:70b",
+        SIMPLE_RUNNER_SUMMARIZER_BACKEND: "ollama:llama3.3:70b",
       },
       listLocalModels: () => ["qwen3:14b"],
       requestJson: (request) => {
@@ -143,7 +143,7 @@ describe("async summarizer", () => {
     const geminiOverride = new AsyncSummarizer({
       env: {
         ...envWithoutSummaryKeys(),
-        KODO_SUMMARIZER_BACKEND: "gemini",
+        SIMPLE_RUNNER_SUMMARIZER_BACKEND: "gemini",
       },
       listLocalModels: () => ["qwen3:14b"],
       requestJson: () => {

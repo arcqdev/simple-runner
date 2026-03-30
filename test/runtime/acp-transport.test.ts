@@ -57,7 +57,7 @@ rl.on("line", (line) => {
         capabilities: {
           initialize: true,
           prompt: true,
-          protocolVersion: "0.1",
+          protocolVersion: 1,
           resume: true,
           serverName: "fake-acp",
           sessionLifecycle: true,
@@ -102,7 +102,7 @@ rl.on("line", (line) => {
     });
 
     const init = await transport.initialize({
-      clientName: "kodo-test",
+      clientName: "simple-runner-test",
       clientVersion: "1.0.0",
       requestedCapabilities: {
         initialize: true,
@@ -156,7 +156,7 @@ createInterface({ input: process.stdin }).on("line", () => {});
 
     await expect(
       transport.request("initialize", {
-        clientName: "kodo-test",
+        clientName: "simple-runner-test",
       }),
     ).rejects.toMatchObject({
       code: "timeout",

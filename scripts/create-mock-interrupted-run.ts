@@ -27,11 +27,12 @@ function writeJsonl(filePath: string, events: Array<Record<string, unknown>>): v
 export function createMockInterruptedRun(
   options: CreateMockInterruptedRunOptions = {},
 ): MockInterruptedRun {
-  const runId = options.runId ?? process.env.KODO_RESUME_TEST_RUN_ID ?? "interrupted_run";
+  const runId =
+    options.runId ?? process.env.SIMPLE_RUNNER_RESUME_TEST_RUN_ID ?? "interrupted_run";
   const projectDir = path.resolve(
     options.projectDir ??
-      process.env.KODO_RESUME_TEST_PROJECT_DIR ??
-      path.join(os.tmpdir(), "kodo_resume_test"),
+      process.env.SIMPLE_RUNNER_RESUME_TEST_PROJECT_DIR ??
+      path.join(os.tmpdir(), "simple-runner-resume-test"),
   );
   const runDir = path.join(options.runsDir ?? runsRoot(), runId);
   const goalText =
@@ -112,10 +113,12 @@ function main(): void {
   process.stdout.write(`  Project: ${fixture.projectDir}\n`);
   process.stdout.write("\n");
   process.stdout.write("To verify resume:\n");
-  process.stdout.write(`  kodo --resume --yes --project ${fixture.projectDir}\n`);
+  process.stdout.write(`  simple-runner --resume --yes --project ${fixture.projectDir}\n`);
   process.stdout.write("\n");
   process.stdout.write("Or resume by run ID:\n");
-  process.stdout.write(`  kodo --resume ${fixture.runId} --yes --project ${fixture.projectDir}\n`);
+  process.stdout.write(
+    `  simple-runner --resume ${fixture.runId} --yes --project ${fixture.projectDir}\n`,
+  );
 }
 
 if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {

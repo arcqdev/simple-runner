@@ -15,7 +15,7 @@ function assert(condition: unknown, message: string): asserts condition {
 function makeTempDir(label: string): string {
   const directory = path.join(
     os.tmpdir(),
-    `kodo-viewer-browser-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    `simple-runner-viewer-browser-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   );
   mkdirSync(directory, { recursive: true });
   return directory;
@@ -209,10 +209,10 @@ async function verifyServedViewer(): Promise<void> {
     ],
   });
 
-  const originalRunsDir = process.env.KODO_RUNS_DIR;
-  const originalTraceUpload = process.env.KODO_TRACE_UPLOAD;
-  process.env.KODO_RUNS_DIR = runsDir;
-  process.env.KODO_TRACE_UPLOAD = "1";
+  const originalRunsDir = process.env.SIMPLE_RUNNER_RUNS_DIR;
+  const originalTraceUpload = process.env.SIMPLE_RUNNER_TRACE_UPLOAD;
+  process.env.SIMPLE_RUNNER_RUNS_DIR = runsDir;
+  process.env.SIMPLE_RUNNER_TRACE_UPLOAD = "1";
 
   const browser = await chromium.launch();
   const page = await browser.newPage();
@@ -296,14 +296,14 @@ async function verifyServedViewer(): Promise<void> {
     await browser.close();
     rmSync(tempRoot, { force: true, recursive: true });
     if (originalRunsDir === undefined) {
-      delete process.env.KODO_RUNS_DIR;
+      delete process.env.SIMPLE_RUNNER_RUNS_DIR;
     } else {
-      process.env.KODO_RUNS_DIR = originalRunsDir;
+      process.env.SIMPLE_RUNNER_RUNS_DIR = originalRunsDir;
     }
     if (originalTraceUpload === undefined) {
-      delete process.env.KODO_TRACE_UPLOAD;
+      delete process.env.SIMPLE_RUNNER_TRACE_UPLOAD;
     } else {
-      process.env.KODO_TRACE_UPLOAD = originalTraceUpload;
+      process.env.SIMPLE_RUNNER_TRACE_UPLOAD = originalTraceUpload;
     }
   }
 }
