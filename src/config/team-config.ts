@@ -104,6 +104,10 @@ export function projectTeamConfigPath(projectDir: string): string {
   return path.join(projectDir, ".simple-runner", "team.json");
 }
 
+function legacyProjectTeamConfigPath(projectDir: string): string {
+  return path.join(projectDir, ".kodo", "team.json");
+}
+
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -286,16 +290,20 @@ export function getTeamByName(
   projectDir?: string,
 ): TeamListing | null {
   if (projectDir !== undefined) {
-    const projectPath = projectTeamConfigPath(projectDir);
-    try {
-      return {
-        name,
-        source: "project",
-        config: loadTeamConfigFile(projectPath),
-        path: projectPath,
-      };
-    } catch {
-      // Fall through to user/built-in lookup when the project override is absent or invalid.
+    for (const projectPath of [
+      projectTeamConfigPath(projectDir),
+      legacyProjectTeamConfigPath(projectDir),
+    ]) {
+      try {
+        return {
+          name,
+          source: "project",
+          config: loadTeamConfigFile(projectPath),
+          path: projectPath,
+        };
+      } catch {
+        continue
+      }
     }
   }
 

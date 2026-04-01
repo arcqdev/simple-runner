@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import process from "node:process";
@@ -883,7 +883,7 @@ function parseStopReason(value) {
   }
 }
 
-async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs) {
+async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs, liveTracePath) {
   const events = [];
   let lastUsage = null;
   let locator;
@@ -915,6 +915,7 @@ async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs) {
     }
 
     events.push(normalized.value);
+    appendLiveTrace(liveTracePath, normalized.value.raw ?? { event: normalized.value.event });
     const current = normalized.value.event;
 
     if (current.type === "usage") {
@@ -937,6 +938,16 @@ async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs) {
       return { error: current.error, events, locator, ok: false, usage: lastUsage };
     }
   }
+}
+
+function appendLiveTrace(liveTracePath, entry) {
+  if (typeof liveTracePath !== "string" || liveTracePath.length === 0 || entry == null) {
+    return;
+  }
+
+  try {
+    appendFileSync(liveTracePath, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch {}
 }
 
 async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
@@ -1121,6 +1132,7 @@ async function runAcpQuery(payload) {
       transport,
       profile.backend,
       250,
+      payload.liveTracePath,
     );
 
     const elapsedS = Number(((Date.now() - startedAt) / 1000).toFixed(3));

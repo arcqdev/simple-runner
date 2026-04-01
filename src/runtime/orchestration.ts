@@ -296,6 +296,51 @@ function orchestratorCostBucket(orchestrator: string): string {
   }
 }
 
+function chooseWorkerForGoal(
+  workerAgents: RuntimeAgent[],
+  cycleIndex: number,
+  goalText: string,
+  acceptCriteria?: string,
+): RuntimeAgent {
+  const combined = `${goalText}\n${acceptCriteria ?? ""}`.toLowerCase();
+  const frontendSignals = [
+    "expo",
+    "ui",
+    "layout",
+    "screen",
+    "component",
+    "components/ui",
+    "style",
+    "visual",
+    "frontend",
+  ];
+  const backendSignals = [
+    "backend",
+    "api",
+    "hono",
+    "drizzle",
+    "repository",
+    "db",
+    "database",
+    "contract",
+    "server",
+    "worker",
+  ];
+  const hasSignal = (signals: string[]): boolean => signals.some((signal) => combined.includes(signal));
+  const frontendWorker = workerAgents.find((agent) => agent.name === "frontend_worker");
+  const backendWorker = workerAgents.find((agent) => agent.name === "backend_worker");
+
+  if (frontendWorker !== undefined && hasSignal(frontendSignals)) {
+    return frontendWorker;
+  }
+
+  if (backendWorker !== undefined && hasSignal(backendSignals)) {
+    return backendWorker;
+  }
+
+  return workerAgents[(cycleIndex - 1) % workerAgents.length] ?? workerAgents[0]!;
+}
+
 function runtimeStatePath(runDir: RunDir): string {
   return path.join(runDir.root, "runtime-state.json");
 }
@@ -2620,7 +2665,7 @@ abstract class RuntimeOrchestratorBase {
           project_dir: flags.project,
         });
 
-        const worker = workerAgents[(cycleIndex - 1) % workerAgents.length];
+        const worker = chooseWorkerForGoal(workerAgents, cycleIndex, goalText, acceptCriteria);
         const restoredPending = pendingExchangeForSingle(state, cycleIndex, goalText);
         const outcome =
           restoredPending !== null

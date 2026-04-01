@@ -5,7 +5,7 @@ import process from "node:process";
 import os from "node:os";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
-import { emit as emitLogEvent, saveConversation } from "../logging/log.js";
+import { emit as emitLogEvent, liveConversationPath, saveConversation } from "../logging/log.js";
 import type { JsonObject } from "./json.js";
 
 export type SessionBackend = "gemini-cli" | "opencode";
@@ -168,6 +168,7 @@ function writeTempJson(dir: string, fileName: string, data: unknown): string {
 function runQueryHelper(payload: {
   acpBackend?: "gemini" | "opencode";
   backend: SessionBackend;
+  liveTracePath?: string | null;
   maxTurns: number;
   model: string;
   projectDir: string;
@@ -326,6 +327,10 @@ class AcpSession implements Session {
     return {
       acpBackend: this.#acpBackend,
       backend: this.backend,
+      liveTracePath:
+        typeof options.agentName === "string" && typeof options.queryIndex === "number"
+          ? liveConversationPath(options.agentName, options.queryIndex)
+          : null,
       maxTurns: options.maxTurns,
       model: this.model,
       projectDir: options.projectDir,

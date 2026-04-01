@@ -9,6 +9,10 @@ export function projectConfigPath(projectDir: string): string {
   return path.join(projectDir, ".simple-runner", "config.json");
 }
 
+function legacyProjectConfigPath(projectDir: string): string {
+  return path.join(projectDir, ".kodo", "config.json");
+}
+
 export function saveProjectConfig(projectDir: string, config: ProjectConfig): void {
   const filePath = projectConfigPath(projectDir);
   try {
@@ -22,9 +26,10 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
 
 export function loadProjectConfig(projectDir: string): ProjectConfig | null {
   const primary = projectConfigPath(projectDir);
+  const legacyPrimary = legacyProjectConfigPath(projectDir);
   const legacy = path.join(projectDir, ".simple-runner", "last-config.json");
 
-  for (const filePath of [primary, legacy]) {
+  for (const filePath of [primary, legacyPrimary, legacy]) {
     try {
       const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {

@@ -133,6 +133,18 @@ export function saveConversation(
   }
 }
 
+export function liveConversationPath(agentName: string, queryIndex: number): string | null {
+  if (activeLogFile === null) {
+    return null;
+  }
+
+  const runRoot = path.dirname(activeLogFile);
+  const conversationsDir = path.join(runRoot, "conversations");
+  mkdirSync(conversationsDir, { recursive: true });
+  const fileName = `${sanitizeConversationLabel(agentName)}_${String(queryIndex).padStart(3, "0")}.live.jsonl`;
+  return path.join(conversationsDir, fileName);
+}
+
 export function getLogFile(): string {
   if (activeLogFile === null) {
     throw new Error("Log file has not been initialized.");

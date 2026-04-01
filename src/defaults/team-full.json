@@ -20,6 +20,20 @@
       "max_turns": 30,
       "timeout_s": 1800
     },
+    "frontend_worker": {
+      "backend": "claude",
+      "model": "claude-sonnet-4-6",
+      "description": "Frontend-focused implementation agent — use for UI, interaction, styling, and client-side behavior.\nDirective: 1-3 sentences describing desired BEHAVIOR, not implementation.\nEach task: ONE independently testable frontend change.",
+      "max_turns": 30,
+      "timeout_s": 1800
+    },
+    "backend_worker": {
+      "backend": "codex",
+      "model": "gpt-5.3-codex-spark",
+      "description": "Backend-focused implementation agent — use for APIs, data flow, server logic, and infrastructure-facing code.\nDirective: 1-3 sentences describing desired BEHAVIOR, not implementation.\nEach task: ONE independently testable backend change.",
+      "max_turns": 30,
+      "timeout_s": 1800
+    },
     "tester": {
       "backend": "opencode",
       "model": "gemini-2.5-flash",
