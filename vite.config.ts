@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync } from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 const external = new Set([
   ...builtinModules,
@@ -17,6 +17,10 @@ const copyQuerySessionHelperPlugin = {
       path.resolve("src/runtime/query-session-helper.mjs"),
       path.join(distDir, "query-session-helper.mjs"),
     );
+    copyFileSync(
+      path.resolve("src/runner-acp-client.mjs"),
+      path.join(distDir, "runner-acp-client.mjs"),
+    );
   },
 };
 
@@ -27,6 +31,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         cli: "src/cli.ts",
+        "runner-acp": "src/runner-acp.ts",
         "viewer-cli": "src/viewer-cli.ts",
       },
       external: Array.from(external),

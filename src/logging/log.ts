@@ -47,6 +47,13 @@ export class RunDir {
 
 let activeLogFile: string | null = null;
 let startTime = 0;
+const subscribers = new Set<(record: LogEventRecord) => void>();
+
+export type LogEventRecord = {
+  event: string;
+  logFile: string | null;
+  record: Record<string, unknown>;
+};
 
 function runsRoot(homeDir = os.homedir()): string {
   const override = process.env.SIMPLE_RUNNER_RUNS_DIR;
@@ -77,6 +84,15 @@ function appendEvent(event: string, fields: Record<string, unknown>): void {
     ...toJsonObject(fields),
   };
   appendFileSync(activeLogFile, `${stringifyJson(record)}\n`, "utf8");
+  for (const subscriber of subscribers) {
+    try {
+      subscriber({
+        event,
+        logFile: activeLogFile,
+        record,
+      });
+    } catch {}
+  }
 }
 
 export function init(runDir: RunDir): string {
@@ -105,6 +121,13 @@ export function initAppend(logFile: string): string {
 
 export function emit(event: string, fields: Record<string, unknown> = {}): void {
   appendEvent(event, fields);
+}
+
+export function subscribe(listener: (record: LogEventRecord) => void): () => void {
+  subscribers.add(listener);
+  return () => {
+    subscribers.delete(listener);
+  };
 }
 
 function sanitizeConversationLabel(value: string): string {

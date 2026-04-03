@@ -51,7 +51,7 @@ import { emitJson, printLines, setProgressOutput, writeStderr } from "./ui.js";
 const HELP_TEXT = [
   "usage: simple-runner [-h] [--version] [--resume [RUN_ID]] [--goal GOAL | --goal-file GOAL_FILE | --improve | --test | --fix-from RUN_ID]",
   "            [--focus FOCUS] [--target TARGET] [--team TEAM] [--exchanges EXCHANGES] [--cycles CYCLES]",
-  "            [--orchestrator ORCHESTRATOR] [--skip-intake] [--auto-refine] [--json] [--yes]",
+  "            [--orchestrator ORCHESTRATOR] [--skip-intake] [--auto-refine] [--json] [--loge] [--yes]",
   "            [--effort {low,standard,high,max}] [--no-auto-commit] [--debug] [--project PROJECT]",
   "",
   "simple-runner - autonomous multi-agent coding",
@@ -77,6 +77,8 @@ const HELP_TEXT = [
   "  --skip-intake         Skip intake interview, use goal as-is",
   "  --auto-refine         Auto-refine goal before implementation.",
   "  --json                Output structured JSON to stdout. Implies --yes.",
+  "  --loge                Enable verbose ACP/session event streaming to the terminal.",
+  "  --view-past-runs      Open the past runs viewer/picker.",
   "  --yes, -y             Skip all confirmation prompts.",
   "  --effort {low,standard,high,max}",
   "                        Effort level.",
@@ -404,7 +406,7 @@ function writeRunArtifacts(
   writeFileSync(runDir.teamFile, `${JSON.stringify(teamConfig, null, 2)}\n`, "utf8");
 }
 
-function createPendingRun(parsed: ParsedMain): {
+export function createPendingRun(parsed: ParsedMain): {
   goal: ResolvedGoal;
   notices: string[];
   params: ResolvedRuntimeParams;
@@ -590,6 +592,7 @@ function summarizeMainInvocation(parsed: ParsedMain): void {
     `Project: ${parsed.flags.project}`,
     `Team: ${params.team}`,
     `Orchestrator: ${params.orchestrator} (${params.orchestratorModel})`,
+    `Loge: ${parsed.flags.loge ? "enabled" : "disabled"}`,
     `Budget: ${params.maxExchanges} exchanges/cycle, ${params.maxCycles} cycles`,
     `Auto-commit: ${params.autoCommit ? "enabled" : "disabled"}`,
     ...(result.artifacts.reportPath === null
@@ -660,11 +663,16 @@ export function runCli(argv = process.argv.slice(2)): number {
   loadDotEnv();
   const jsonMode = argv.includes("--json");
   setProgressOutput(jsonMode ? "stderr" : "stdout");
+  const previousLoge = process.env.SIMPLE_RUNNER_LOGE;
 
   try {
     if (argv.length === 0) {
       printHelp();
       return 0;
+    }
+
+    if (argv.includes("--view-past-runs")) {
+      return handleSubcommand("logs", []);
     }
 
     const first = argv[0];
@@ -678,8 +686,17 @@ export function runCli(argv = process.argv.slice(2)): number {
     }
 
     const rewritten =
-      first === "test" || first === "improve" ? [`--${first}`, ...argv.slice(1)] : argv;
+      first === "test" || first === "improve"
+        ? [`--${first}`, ...argv.slice(1)]
+        : first === "loge"
+          ? ["--loge", ...argv.slice(1)]
+          : argv;
     const parsed = parseMainArgs(rewritten);
+    if (parsed.flags.loge) {
+      process.env.SIMPLE_RUNNER_LOGE = "1";
+    } else {
+      delete process.env.SIMPLE_RUNNER_LOGE;
+    }
 
     if (parsed.flags.version) {
       printVersion();
@@ -728,6 +745,11 @@ export function runCli(argv = process.argv.slice(2)): number {
   } catch (error) {
     return emitError(error, jsonMode);
   } finally {
+    if (previousLoge === undefined) {
+      delete process.env.SIMPLE_RUNNER_LOGE;
+    } else {
+      process.env.SIMPLE_RUNNER_LOGE = previousLoge;
+    }
     setProgressOutput("stdout");
   }
 }

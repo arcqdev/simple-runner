@@ -36,7 +36,7 @@ if (args.includes("--version")) {
   console.log("gemini 1.0.0");
   process.exit(0);
 }
-if (args[0] !== "acp") {
+if (!args.includes("--acp")) {
   process.exit(1);
 }
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
@@ -47,17 +47,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       id: message.id,
       jsonrpc: "2.0",
       result: {
-        capabilities: {
-          initialize: true,
-          prompt: true,
-          protocolVersion: "0.1",
-          resume: true,
-          serverName: "fake-gemini-acp",
-          serverVersion: "1.0.0",
-          sessionLifecycle: true,
-          streaming: true,
-          usage: true,
+        agentCapabilities: {
+          promptCapabilities: {
+            image: false,
+          },
         },
+        agentInfo: {
+          name: "fake-gemini-acp",
+          version: "1.0.0",
+        },
+        protocolVersion: 1,
       },
     });
     return;
@@ -90,17 +89,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       id: message.id,
       jsonrpc: "2.0",
       result: {
-        capabilities: {
-          initialize: true,
-          prompt: true,
-          protocolVersion: "0.1",
-          resume: true,
-          serverName: "fake-opencode-acp",
-          serverVersion: "0.1.0",
-          sessionLifecycle: true,
-          streaming: true,
-          usage: true,
+        agentCapabilities: {
+          promptCapabilities: {
+            image: false,
+          },
         },
+        agentInfo: {
+          name: "fake-opencode-acp",
+          version: "0.1.0",
+        },
+        protocolVersion: 1,
       },
     });
     return;

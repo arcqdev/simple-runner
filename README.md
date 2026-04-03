@@ -1,118 +1,211 @@
-# kodo TypeScript Cutover
+# simple-runner
 
-This repository is now the primary implementation path for `kodo`.
+`simple-runner` is a local multi-agent coding runner with:
 
-Normal workflows no longer require the Python repo:
+- a default "regular" orchestrator path via `pi`
+- ACP-backed local orchestrators via `gemini-cli` and `opencode`
+- saved run logs and a built-in run viewer
 
-- start a run with `kodo --goal ...`
-- use specialized modes with `kodo --test`, `kodo --improve`, and `kodo --fix-from`
-- inspect runs with `kodo runs`, `kodo logs`, and `kodo-viewer`
-- report failures with `kodo issue`
-- manage teams with `kodo teams`
-- upgrade with `kodo update`
-
-## Install And Run
+## Install
 
 Requirements:
 
 - Node.js 20+
 - npm
-- for ACP-backed local runs, `gemini` or `opencode` on `PATH`
-- for Gemini/OpenCode ACP auth, `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-- or provider API credentials for the API orchestrator path
 
-Local setup:
+Setup:
 
 ```bash
 npm install
 npm run build
+```
+
+Run it directly from the repo:
+
+```bash
+node dist/cli.js --help
+```
+
+If you want the binary on your `PATH`:
+
+```bash
 npm link
 ```
 
-This makes the local binaries available:
-
-- `kodo`
-- `kodo-viewer`
-
-Examples:
+Then you can use:
 
 ```bash
-kodo --goal "Ship the feature"
-kodo --goal "Ship the feature" --orchestrator gemini-cli:gemini-3-flash
-kodo --goal "Ship the feature" --orchestrator opencode:gemini-2.5-flash
-kodo --test --project .
-kodo runs
-kodo logs
-kodo issue --no-open
+simple-runner --help
 ```
 
-If you do not want browser windows to open automatically, set `KODO_NO_VIEWER=1`.
+## Basic Usage
 
-Operator verification helpers live in [docs/verify-resume.md](/Users/eddie/dev/arcqdev/simple-runner/docs/verify-resume.md), [docs/ralph-loop.md](/Users/eddie/dev/arcqdev/simple-runner/docs/ralph-loop.md), and [scripts/README.md](/Users/eddie/dev/arcqdev/simple-runner/scripts/README.md).
-
-## ACP Runtime Ops
-
-ACP is the default local runtime path for Gemini and OpenCode. In normal local usage:
-
-- `gemini-cli` uses the `gemini` ACP server command
-- `opencode` uses the `opencode acp --provider gemini` ACP server command
-- both expect Gemini-family credentials from `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-
-Preflight the current machine before operator testing:
+Run against the current repo with the default regular orchestrator:
 
 ```bash
-kodo backends
+simple-runner --goal "Make a small change and keep the app working."
 ```
 
-What to check:
-
-- `gemini-cli` or `opencode` shows as installed and ACP-ready
-- credential warnings are resolved before expecting live ACP runs to succeed
-- if only API keys are available, `api` remains a valid orchestrator path, but that is distinct from the ACP local runtime
-
-Resume and run inspection:
+Run against another repo:
 
 ```bash
-kodo runs
-kodo logs
-kodo --resume --project /path/to/project
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working."
 ```
 
-Troubleshooting:
-
-- install or fix `gemini` / `opencode` if `kodo backends` reports the backend as unavailable
-- set `GEMINI_API_KEY` or `GOOGLE_API_KEY` if ACP preflight reports missing credentials
-- use `npm run ops:analyze-run -- <run-id>` to inspect run state and artifacts
-- use `npm run ops:verify-resume` to verify resume flow without live backend dependencies
-- set `KODO_RUNS_DIR` to isolate operator test runs from your normal `~/.kodo/runs`
-- set `KODO_NO_VIEWER=1` if browser auto-open is not wanted during ops testing
-
-## Ralph Loop
-
-ACP migration specs can be executed sequentially with `ralph.py` from the repo root:
+Skip intake and prompts:
 
 ```bash
-python3 ralph.py --specs-dir specs
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working." \
+  --skip-intake \
+  --yes
 ```
 
-Useful options:
+Specialized modes:
 
-- `--dry-run` to list the spec order without invoking Codex
-- `--done-path specs/done.md` to track completed specs
-- `--log-path specs/agent-run.log` to keep the per-attempt transcript
-- `--magic-phrase SPEC_COMPLETE` to require the completion token from the worker
+```bash
+simple-runner --test --project /path/to/project
+simple-runner --improve --project /path/to/project
+simple-runner --fix-from <run_id> --project /path/to/project
+```
 
-`ralph.py` runs each spec from the repository root and, by default, shells out to `codex exec --dangerously-bypass-approvals-and-sandbox`.
+## Orchestrators
 
-## Cutover Notes
+### Regular orchestrator
 
-ACP is now the default local runtime path. The built-in teams target Gemini and OpenCode through ACP, and the legacy direct vendor CLI session adapters have been removed from the session layer.
+If you do **not** want to use `opencode`, use the default orchestrator and do not pass `--orchestrator`.
 
-The current cutover status is documented in [cutover.md](/Users/eddie/dev/arcqdev/simple-runner/cutover.md), [parity-matrix.md](/Users/eddie/dev/arcqdev/simple-runner/parity-matrix.md), and [test-migration-matrix.md](/Users/eddie/dev/arcqdev/simple-runner/test-migration-matrix.md).
+```bash
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working."
+```
 
-The remaining deferred work is non-blocking for normal CLI usage:
+That uses the regular orchestrator path, which defaults to `pi`.
 
-- Python knowledge mode is not ported yet.
-- Benchmark tooling from the Python repo is not ported yet.
-- Runtime state still persists string session identifiers instead of full ACP conversation locators.
-- Log summaries still collapse streamed ACP events into the existing terminal-text oriented surfaces.
+You can also force it explicitly:
+
+```bash
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working." \
+  --orchestrator pi
+```
+
+### ACP orchestrators
+
+Use Gemini ACP:
+
+```bash
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working." \
+  --orchestrator gemini-cli:gemini-3-flash
+```
+
+Use OpenCode ACP:
+
+```bash
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working." \
+  --orchestrator opencode:gemini-3.1-flash-lite-preview
+```
+
+Notes:
+
+- `opencode` and `gemini-cli` are the current live ACP-backed orchestrator paths.
+- `codex` is not a live orchestrator path here yet. If you select it, `simple-runner` now errors instead of faking success.
+
+## Live Logging
+
+To get more live session output in the terminal, use `loge` mode:
+
+```bash
+simple-runner loge \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working." \
+  --skip-intake \
+  --yes \
+  --team quick \
+  --orchestrator opencode:gemini-3.1-flash-lite-preview
+```
+
+Equivalent flag form:
+
+```bash
+simple-runner \
+  --loge \
+  --project /path/to/project \
+  --goal "Make a small change and keep the app working."
+```
+
+`--loge` is most useful on ACP-backed runs. It prints agent starts, tool activity, usage updates, and verifier progress as the run happens.
+
+## Viewing Past Runs
+
+Open the past-runs picker from the main binary:
+
+```bash
+simple-runner --view-past-runs
+```
+
+Other run inspection commands:
+
+```bash
+simple-runner runs
+simple-runner logs
+simple-runner --resume
+simple-runner --resume <run_id>
+```
+
+If you want the direct viewer entrypoint, it still exists:
+
+```bash
+simple-runner-viewer ~/.simple-runner/runs/<run_id>/log.jsonl
+```
+
+## Teams
+
+List teams:
+
+```bash
+simple-runner teams
+```
+
+Generate teams for the current machine:
+
+```bash
+simple-runner teams auto
+```
+
+Use a specific team:
+
+```bash
+simple-runner \
+  --project /path/to/project \
+  --goal "Make a small change" \
+  --team quick
+```
+
+## Backend Checks
+
+Check which local backends are usable:
+
+```bash
+simple-runner backends
+```
+
+For ACP-backed runs, you usually want:
+
+- `gemini` and/or `opencode` installed
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY` set when required
+
+## Notes
+
+- Runs are stored under `~/.simple-runner/runs`.
+- The viewer path for a completed run is printed at the end of each run.
+- `docs/verify-resume.md`, `docs/ralph-loop.md`, and `scripts/README.md` still contain operator-focused material.

@@ -83,6 +83,29 @@ function stringifyUnknown(value) {
   }
 }
 
+function logeEnabled() {
+  return process.env.SIMPLE_RUNNER_LOGE === "1";
+}
+
+function writeLoge(text) {
+  if (!logeEnabled()) {
+    return;
+  }
+  process.stdout.write(`${text}\n`);
+}
+
+function compactText(value) {
+  return typeof value === "string" ? value.replace(/\s+/gu, " ").trim() : "";
+}
+
+function contentText(value) {
+  const record = toRecord(value);
+  if (record !== null) {
+    return compactText(record.text);
+  }
+  return compactText(value);
+}
+
 function buildWorkerEnv() {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
@@ -915,6 +938,7 @@ async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs, li
     }
 
     events.push(normalized.value);
+    emitRawLoge(payloadAgentName, normalized.value.raw ?? envelope.message, normalized.value.event);
     appendLiveTrace(liveTracePath, normalized.value.raw ?? { event: normalized.value.event });
     const current = normalized.value.event;
 
@@ -940,6 +964,55 @@ async function collectAcpUpdatesUntilIdle(transport, backend, eventTimeoutMs, li
   }
 }
 
+let payloadAgentName = null;
+
+function emitRawLoge(agentName, raw, normalizedEvent) {
+  if (!logeEnabled()) {
+    return;
+  }
+
+  const agent = typeof agentName === "string" && agentName.length > 0 ? agentName : "agent";
+  const rawRecord = toRecord(raw);
+  const params = toRecord(rawRecord?.params);
+  const update = toRecord(params?.update);
+  const sessionUpdate = stringField(update, "sessionUpdate");
+
+  if (sessionUpdate === "tool_call" || sessionUpdate === "tool_call_update") {
+    const title =
+      compactText(stringField(update, "title")) || compactText(stringField(update, "kind")) || "tool";
+    const status = compactText(stringField(update, "status")) || "pending";
+    writeLoge(`[${agent}] tool ${title} ${status}`);
+    return;
+  }
+
+  if (sessionUpdate === "agent_message_chunk") {
+    const text = contentText(update?.content);
+    if (text.length > 0) {
+      writeLoge(`[${agent}] ${text}`);
+    }
+    return;
+  }
+
+  if (sessionUpdate === "usage_update") {
+    writeLoge(`[${agent}] usage ${params?.update?.used ?? "?"}/${params?.update?.size ?? "?"}`);
+    return;
+  }
+
+  if (normalizedEvent?.type === "session.created" || normalizedEvent?.type === "session.resumed") {
+    writeLoge(
+      `[${agent}] ${normalizedEvent.type} ${normalizedEvent.locator?.conversationId ?? ""}`.trim(),
+    );
+    return;
+  }
+
+  if (normalizedEvent?.type === "message.delta") {
+    const text = compactText(normalizedEvent.delta);
+    if (text.length > 0) {
+      writeLoge(`[${agent}] ${text}`);
+    }
+  }
+}
+
 function appendLiveTrace(liveTracePath, entry) {
   if (typeof liveTracePath !== "string" || liveTracePath.length === 0 || entry == null) {
     return;
@@ -950,7 +1023,7 @@ function appendLiveTrace(liveTracePath, entry) {
   } catch {}
 }
 
-async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
+async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs, liveTracePath) {
   const events = [];
   let lastUsage = null;
   let locator;
@@ -991,6 +1064,8 @@ async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
     }
 
     events.push(normalized.value);
+    emitRawLoge(payloadAgentName, normalized.value.raw ?? envelope.message, normalized.value.event);
+    appendLiveTrace(liveTracePath, normalized.value.raw ?? { event: normalized.value.event });
     const current = normalized.value.event;
 
     if (current.type === "usage") {
@@ -1003,6 +1078,9 @@ async function collectAcpQueryOutcome(transport, backend, eventTimeoutMs) {
     }
     if (current.type === "error") {
       return { error: current.error, events, locator, ok: false, usage: lastUsage };
+    }
+    if (current.type === "message.completed") {
+      continue;
     }
     if (current.type === "result") {
       return {
@@ -1042,6 +1120,7 @@ function formatAcpError(error, profileInfo, timeoutS) {
 }
 
 async function runAcpQuery(payload) {
+  payloadAgentName = typeof payload.agentName === "string" ? payload.agentName : null;
   const profileInfo = acpProfiles(payload);
   const { profile } = profileInfo;
   const transport = new LineTransport({
@@ -1128,7 +1207,7 @@ async function runAcpQuery(payload) {
       );
     }
 
-    const outcome = await collectAcpUpdatesUntilIdle(
+    const outcome = await collectAcpQueryOutcome(
       transport,
       profile.backend,
       250,
@@ -1162,7 +1241,7 @@ async function runAcpQuery(payload) {
       };
     }
 
-    const finalLocator = outcome.locator ?? locator;
+    const finalLocator = outcome.result.locator ?? outcome.locator ?? locator;
     return {
       acpBackend: profileInfo.selected,
       costBucket: profile.costBucket,
@@ -1170,7 +1249,9 @@ async function runAcpQuery(payload) {
       errorCode: null,
       errorDetails: null,
       inputTokens: outcome.usage?.inputTokens ?? null,
-      isError: parseStopReason(stringField(promptRecord, "stopReason")) === "failed",
+      isError:
+        parseStopReason(stringField(promptRecord, "stopReason")) === "failed" ||
+        parseStopReason(outcome.result.stopReason) === "failed",
       outputTokens: outcome.usage?.outputTokens ?? null,
       provider: profileInfo.provider,
       providerEnvVars: profileInfo.providerEnvVars,
@@ -1178,8 +1259,8 @@ async function runAcpQuery(payload) {
       rawMessages,
       serverSessionId: finalLocator?.serverSessionId ?? null,
       sessionId: finalLocator?.conversationId ?? payload.resumeSessionId ?? null,
-      text: outcome.text,
-      usageRaw: outcome.usage?.raw ?? null,
+      text: outcome.result.text,
+      usageRaw: (outcome.result.usage ?? outcome.usage)?.raw ?? null,
     };
   } finally {
     try {

@@ -1,160 +1,413 @@
-# Missing Functionality Vs `../kodo`
+# Runner ACP Plan
 
-Baseline:
+## Purpose
 
-- Compared repo: `/Users/eddie/dev/arcqdev/kodo`
-- This repo: `/Users/eddie/dev/arcqdev/simple-runner`
-- Comparison date: March 23, 2026
-- Explicitly excluded from this list: Kimi execution support
+Add a top-level ACP interface for `simple-runner` itself so an ACP client can:
 
-## Goal
+- start a run in an ACP-native way
+- watch the run progress live
+- observe orchestrator and worker activity as the run proceeds
+- receive a terminal run result with artifact references
 
-Track the user-visible functionality that still exists in `../kodo` but is missing or materially reduced in this TypeScript implementation.
+This must be done without breaking the existing CLI workflow.
 
-## Missing Features
+## Hard Separation: Two Different ACP Layers
 
-### 1. Intake And Goal Refinement
+This repository will have two distinct ACP concepts. They must not be blended in naming, code structure, logs, or docs.
 
-- Core intake flow is now ported in TypeScript.
-  - Interactive goal intake can preview `goal.md`, offer quick refine vs interview, and reuse stored intake artifacts.
-  - Non-interactive `--goal` / `--goal-file` runs can generate and reuse staged plans.
-  - `--auto-refine` now writes a real refined goal artifact instead of acting like a placeholder flag.
-  - `--skip-intake` now skips a real intake path rather than a stub.
-- Remaining delta:
-  - The intake implementation is deterministic/local rather than backend-conversation driven like Python.
+### 1. Runner ACP
 
-### 2. Runtime Team And Config Resolution
+Runner ACP is the public ACP surface exposed by `simple-runner`.
 
-- Team config loading is less capable than Python.
-  - Missing runtime construction of fully validated executable teams from JSON.
-  - Missing Python-equivalent prompt enrichment and role-default injection during team build.
-  - Missing verifier-reference validation at Python parity.
-- Launch-time team recovery is missing.
-  - Python can recover from unavailable backends by offering `kodo teams auto` and retrying.
-  - TypeScript has `teams auto`, but not the same launch-time recovery behavior.
-- Interactive orchestrator/model selection is reduced.
-  - Missing provider/model discovery parity.
-  - Missing Ollama model discovery in the config flow.
-  - Missing early per-model API-key validation parity.
-- JSON/non-interactive launch behavior is thinner.
-  - Missing Python-equivalent separation of machine output from human progress output throughout launch.
-- Environment handling is reduced.
-  - Missing Python’s concurrency-safe environment mutation behavior used around backend selection and session setup.
+Its job is to let an external client talk to the runner as a whole:
 
-### 3. Orchestrator Implementations
+- create a run
+- observe run lifecycle events
+- reconnect to a run
+- receive final status and artifacts
 
-- Separate orchestrator implementations are not ported.
-  - Missing API orchestrator parity.
-  - Missing Claude Code orchestrator parity.
-  - Missing Codex CLI orchestrator parity.
-  - Missing Cursor CLI orchestrator parity.
-  - Missing Gemini CLI orchestrator parity.
-- The TypeScript runtime currently relies on a single generic orchestration loop instead of the Python set of backend-specific orchestrators.
+Runner ACP is about orchestration-level control and observability.
 
-### 4. Stage Planning And Execution
+### 2. Worker ACP
 
-- Adaptive stage planning is now present.
-  - Runtime stage execution re-assesses progress between completed stages.
-  - The runtime can inject follow-up stages discovered during execution and stop early when the goal is already complete.
-- Parallel stage execution is now present.
-  - Stages sharing a `parallel_group` run as a real concurrent stage group.
-  - Parallel stage groups execute in isolated per-stage loops and then continue into later sequential stages.
-  - Parallel stage groups now execute in isolated git worktrees and merge back persisted changes.
+Worker ACP is the private implementation detail used by `simple-runner` when it talks to worker backends such as Gemini or OpenCode.
 
-### 5. Verification And Done Semantics
+Its job is to let the orchestrator communicate with underlying agents:
 
-- Verification and done semantics now cover the Python-equivalent normal paths.
-  - Full, skip, and quick-check verification modes are available.
-  - First-attempt verifier reset and fresh-worker fallback verification are present.
-  - Stage-specific verification control and browser-verifier gating are wired through execution.
-  - Done handling now normalizes structured signals in addition to legacy text markers.
+- create or resume worker sessions
+- send prompts to workers
+- consume worker streaming events
+- normalize usage and provider metadata
 
-### 6. Git Worktree Isolation
+Worker ACP is not the public API of the runner.
 
-- Worktree-based execution support is now present.
-  - Isolated git worktree creation is used for parallel stage execution.
-  - Stale worktree cleanup is implemented.
-  - Worktree commit handling is implemented for persisted stage branches.
-  - Persisted stage branches merge back into the main branch after completion.
-- TypeScript still keeps the simpler repo-level auto-commit behavior for normal sequential execution.
+### Rule
 
-### 7. Resume Behavior
+Runner ACP must never expose worker ACP transport shapes directly. If worker ACP changes, runner ACP should remain stable.
 
-- Resume is present but simpler than Python.
-  - Missing richer resume state parity.
-  - Missing backend-specific resume injection semantics that Python applies per session type.
-  - Missing Python-equivalent pending-exchange resume behavior.
+## Explicit Terminology
 
-### 8. Logging And Run Accounting
+Use the following names consistently:
 
-- Rich run accounting is present in TypeScript logs and parsed run state.
-  - Per-agent call, token, elapsed-time, and error accounting are captured.
-  - Orchestrator cost-bucket metadata is carried through logs and downstream parsing.
+- `runner ACP`: the public ACP server exposed by this repo
+- `worker ACP`: the private ACP client/runtime used for agent backends
+- `run`: one top-level execution of `simple-runner`
+- `worker session`: one underlying backend session used by a worker or orchestrator agent
+- `run handle`: the runner ACP identity for a run
+- `worker locator`: the private ACP locator for a backend conversation
 
-### 9. Conversation Capture
+Never call a worker locator a run handle.
+Never call a run handle a session id.
+Never reuse worker ACP event names as runner ACP event names unless they are deliberately normalized first.
 
-- Conversation artifacts are persisted under each run directory in `conversations/`.
-  - Archives include those artifacts as part of the normal run payload.
-  - Viewer and run parsing can surface the captured conversation paths.
+## Goals
 
-### 10. Viewer Richness
+- Preserve the existing CLI: `simple-runner ...` remains a first-class entry point.
+- Add a new ACP-native entry point for launching and observing runs.
+- Stream structured progress and activity events live.
+- Preserve current run logs and viewer compatibility.
+- Keep worker ACP hidden behind internal runtime boundaries.
 
-- Viewer richness is now closed at the current parity target.
-  - Embedded run index metadata includes run accounting, stage state, conversation artifacts, and per-agent/bucket breakdowns.
-  - The TypeScript viewer surfaces richer run summaries, picker filtering, artifact state, and accounting breakdowns in both standalone and served modes.
-  - Browser-level verification now covers the main served-viewer and embedded-log behaviors.
+## Non-Goals
 
-### 11. Operational Docs And Support Scripts
+- No steering of active workers over runner ACP.
+- No external tool injection into a running orchestrator.
+- No direct exposure of vendor-specific worker ACP envelopes.
+- No requirement that runner ACP support every worker ACP event one-to-one.
+- No replacement of the current CLI UX.
 
-- Operator-facing support assets are now present in TypeScript.
-  - Resume verification is documented in `docs/verify-resume.md`.
-  - Viewer verification is covered by `scripts/verify-viewer-browser.ts` and documented in `scripts/README.md`.
-  - Related run-inspection workflows are covered by `scripts/analyze-run.ts` plus the mocked resume fixture helpers.
+## Architectural Decision
 
-### 12. Test Coverage For Missing Areas
+The correct model is:
 
-- The targeted parity-grade regression coverage for the recently ported support/runtime areas is now present.
-  - Adaptive orchestration, parallel/worktree execution, summarizer behavior, and trace-upload flows are covered under `test/runtime` and `test/logging`.
-  - Browser-level viewer verification is covered by `npm run test:viewer-browser`.
-  - Remaining unported Python-suite breadth is tracked in `test-migration-matrix.md` as a broader follow-on effort rather than an unexplained gap for these shipped features.
+- `simple-runner` remains the orchestrator and run owner
+- runner ACP wraps the runner
+- worker ACP remains behind the runtime/session layer
 
-## Not Missing Or Good Enough For Normal Use
+The incorrect model is:
 
-These areas appear to exist in usable form already, even if the implementation differs from Python:
+- exposing underlying Gemini/OpenCode ACP sessions as if they were the runner API
+- making external clients reason about backend-specific worker session locators
+- letting runner ACP become a thin proxy over worker ACP
 
-- Top-level CLI shell and aliases
-- `test`, `improve`, and `fix-from` entrypoints
-- Run listing
-- Basic log viewing
-- Basic run resume
-- Team management commands
-- Basic backend detection
-- Basic orchestration loop
-- Basic staged plan loading
-- Basic verification loop
-- Basic auto-commit
+## Existing Seams To Reuse
 
-## Suggested Priority
+The current codebase already has useful boundaries:
 
-### Must-Have For Full Parity
+- CLI entrypoint in `src/cli/main.ts`
+- execution entry in `src/runtime/engine.ts`
+- orchestration lifecycle in `src/runtime/orchestration.ts`
+- worker session runtime in `src/runtime/sessions.ts`
+- worker ACP transport and normalization in `src/runtime/acp-transport.ts`, `src/runtime/acp-normalization.ts`, and `src/runtime/acp-contract.ts`
+- log persistence in `src/logging/log.ts`
+- run/viewer reconstruction in `src/logging/runs.ts` and `src/viewer.ts`
 
-- Intake and goal refinement
-- Separate orchestrator implementations
-- Adaptive and parallel stage execution
-- Verification and done-signal parity
-- Git worktree isolation and merge-back
-- Richer resume semantics
-- Trace upload
+The plan should build on those seams instead of replacing them.
 
-### Strongly Desired
+## Target Design
 
-- Rich run accounting
-- Conversation capture
-- Archive scrubbing parity
-- Viewer richness
-- Launch-time team recovery and config parity
+### Public entry points
 
-### Nice To Have Or Separate Track
+Keep:
 
-- Operational docs and support scripts
-- Expanded parity tests for all of the above
+- existing CLI entrypoint for interactive and script usage
+
+Add:
+
+- `simple-runner --acp` or a dedicated `simple-runner-acp` binary
+
+The ACP entry point should host the runner ACP server.
+
+### Shared execution layer
+
+Extract a programmatic run-launch API below the CLI parser, something conceptually like:
+
+- `startRun(request, sinks)`
+- `resumeRun(request, sinks)`
+
+Both the CLI and runner ACP server should call this shared execution layer.
+
+The CLI remains responsible for:
+
+- argument parsing
+- TTY prompts
+- printing terminal-oriented output
+
+The shared execution layer becomes responsible for:
+
+- run creation
+- run lifecycle execution
+- structured event emission
+- artifact production
+
+### Event bus
+
+Add an internal event subscriber mechanism alongside the current JSONL logging.
+
+Requirements:
+
+- every important run event is still written to `log.jsonl`
+- the same event can also be published to in-process subscribers
+- runner ACP subscribes to that in-process stream
+- the current viewer can continue to rely on logs
+
+The runner ACP server should not tail files to get live updates if an in-process event bus is available.
+
+## Event Model Separation
+
+### Runner ACP events
+
+Runner ACP should publish normalized run-level events such as:
+
+- `run.started`
+- `run.resumed`
+- `run.preflight.started`
+- `run.preflight.completed`
+- `planning.started`
+- `planning.completed`
+- `stage.started`
+- `stage.completed`
+- `cycle.started`
+- `cycle.completed`
+- `agent.started`
+- `agent.progress`
+- `agent.completed`
+- `tool.call`
+- `tool.result`
+- `warning`
+- `run.completed`
+- `run.failed`
+
+These are runner-owned events. They are stable, product-level events.
+
+### Worker ACP events
+
+Worker ACP events remain internal and backend-shaped, for example:
+
+- `session.created`
+- `session.resumed`
+- `message.delta`
+- `message.completed`
+- `tool.call`
+- `tool.result`
+- `usage`
+- `warning`
+- `result`
+
+These are transport/runtime events for backend sessions, not the public run API.
+
+### Mapping rule
+
+Worker ACP events may be translated into runner ACP events, but only after normalization.
+
+Examples:
+
+- worker `message.delta` can become runner `agent.progress`
+- worker `tool.call` can become runner `tool.call`
+- worker `result` can contribute to runner `agent.completed`
+
+Do not forward raw worker ACP notifications as runner ACP notifications.
+
+## Identity Model
+
+### Runner ACP identity
+
+Runner ACP should identify work using a run-level handle, derived from the run id.
+
+This handle represents:
+
+- one `simple-runner` run
+- its current lifecycle state
+- its artifacts and summary
+
+### Worker ACP identity
+
+Worker ACP identity remains private and may include:
+
+- conversation id
+- provider thread id
+- server session id
+
+These locators are implementation details owned by the worker runtime.
+
+### Rule
+
+A runner ACP client should never need a worker ACP locator to observe or resume a run.
+
+## Logging and Observability
+
+The current log is the canonical audit trail.
+
+Runner ACP should:
+
+- consume structured runtime events as they happen
+- emit normalized notifications to clients
+- include the run id in every notification
+- surface artifact paths and status transitions
+
+Worker ACP details can still be preserved in logs for debugging, but those details should be treated as internal metadata.
+
+### Minimum live visibility
+
+An ACP client should be able to see:
+
+- when the run starts
+- when planning starts and ends
+- when a stage or parallel group starts
+- when a worker is dispatched
+- what worker/tool activity is happening at a high level
+- when a cycle completes
+- whether the run finished, failed, or was interrupted
+
+## Phased Implementation
+
+### Phase 1: Shared run entrypoint
+
+- extract a programmatic execution API from the CLI path
+- keep CLI behavior unchanged
+- make the execution API independent from terminal output concerns
+
+Acceptance criteria:
+
+- CLI still works unchanged
+- a non-CLI caller can start a run programmatically
+
+### Phase 2: Internal run event bus
+
+- add a subscriber-based event stream for runtime/log events
+- keep JSONL logging as-is
+- publish key lifecycle events from engine, orchestration, and sessions
+
+Acceptance criteria:
+
+- run logs still reconstruct correctly
+- an in-process subscriber can observe a full run without reading files
+
+### Phase 3: Runner ACP protocol surface
+
+- add a runner ACP server entrypoint
+- implement initialize/session lifecycle/start/resume/streaming/final result
+- define runner ACP request and notification schemas in a dedicated module
+
+Acceptance criteria:
+
+- an ACP client can start a run
+- an ACP client receives live run notifications
+- the final result contains status, summary, run id, and artifact references
+
+### Phase 4: Worker-to-runner event normalization
+
+- map worker ACP and orchestration events into runner ACP events
+- preserve enough information for live visibility without leaking backend-specific envelopes
+- keep usage/provider metadata available as structured optional details
+
+Acceptance criteria:
+
+- orchestrator and worker activity is understandable from runner ACP alone
+- no consumer needs Gemini/OpenCode-specific event parsing
+
+### Phase 5: Resume and reconnect
+
+- support reconnecting to a run by run handle
+- expose current run state and final artifacts for completed runs
+- keep worker session resume private
+
+Acceptance criteria:
+
+- runner ACP resume/reconnect works even if worker session ids are opaque
+- reconnect does not require access to backend conversation locators
+
+### Phase 6: Tests and docs
+
+- add unit tests for runner ACP event mapping
+- add integration tests for launch, stream, complete, and reconnect
+- document the boundary between runner ACP and worker ACP in repo docs
+
+Acceptance criteria:
+
+- clear test coverage for the public runner ACP contract
+- docs make the two layers hard to confuse
+
+## File Plan
+
+Likely additions:
+
+- `src/runner-acp/contract.ts`
+- `src/runner-acp/server.ts`
+- `src/runner-acp/normalization.ts`
+- `src/runner-acp/types.ts`
+
+Likely refactors:
+
+- `src/cli/main.ts`
+- `src/runtime/engine.ts`
+- `src/runtime/orchestration.ts`
+- `src/runtime/sessions.ts`
+- `src/logging/log.ts`
+
+Likely tests:
+
+- `test/runner-acp/*.test.ts`
+- integration coverage around CLI parity and ACP launch behavior
+
+## Naming Guardrails
+
+These rules are mandatory:
+
+- do not place runner ACP types in `src/runtime/acp-*`
+- do not name runner ACP types as generic `Acp*` if they are runner-specific
+- do not expose worker ACP locators in runner ACP return types
+- do not expose raw backend notifications in runner ACP streams
+- do not call a run “session” unless the type explicitly means runner ACP session
+
+Preferred naming:
+
+- `RunnerAcpServer`
+- `RunnerAcpEvent`
+- `RunnerAcpRunHandle`
+- `WorkerAcpLocator`
+- `WorkerAcpTransport`
+
+## Risks
+
+### Risk 1: Layer collapse
+
+The biggest risk is accidentally turning runner ACP into a pass-through for worker ACP.
+
+Mitigation:
+
+- separate modules
+- separate naming
+- separate event schemas
+- separate identity types
+
+### Risk 2: Dual observability systems
+
+Another risk is building a new live event pipeline that diverges from log output.
+
+Mitigation:
+
+- keep one canonical runtime event stream
+- log it to JSONL
+- publish the same events to in-process subscribers
+
+### Risk 3: Resume confusion
+
+A run-level reconnect can be confused with a worker-session resume.
+
+Mitigation:
+
+- runner ACP resume is run-centric
+- worker ACP resume remains internal
+- use distinct type names everywhere
+
+## Final Acceptance Criteria
+
+The work is complete when all of the following are true:
+
+- the existing CLI still works unchanged
+- `simple-runner` can be launched through a runner ACP entry point
+- an ACP client can watch live orchestrator and worker activity in runner terms
+- the public ACP surface does not require understanding Gemini/OpenCode ACP
+- worker ACP remains an internal implementation detail
+- docs and type names make the separation obvious

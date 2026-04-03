@@ -54,17 +54,16 @@ rl.on("line", (line) => {
       id: message.id,
       jsonrpc: "2.0",
       result: {
-        capabilities: {
-          initialize: true,
-          prompt: true,
-          protocolVersion: 1,
-          resume: true,
-          serverName: "fake-acp",
-          sessionLifecycle: true,
-          serverVersion: "1.0.0",
-          streaming: true,
-          usage: true,
+        agentCapabilities: {
+          promptCapabilities: {
+            image: false,
+          },
         },
+        agentInfo: {
+          name: "fake-acp",
+          version: "1.0.0",
+        },
+        protocolVersion: 1,
       },
     });
     send({
@@ -102,9 +101,7 @@ rl.on("line", (line) => {
     });
 
     const init = await transport.initialize({
-      clientName: "simple-runner-test",
-      clientVersion: "1.0.0",
-      requestedCapabilities: {
+      clientCapabilities: {
         initialize: true,
         prompt: true,
         resume: true,
@@ -114,7 +111,7 @@ rl.on("line", (line) => {
       },
     });
 
-    expect(init.capabilities.protocolVersion).toBe(ACP_PROTOCOL_VERSION);
+    expect(init.protocolVersion).toBe(ACP_PROTOCOL_VERSION);
 
     const created = await transport.nextEnvelope();
     expect(created).toMatchObject({

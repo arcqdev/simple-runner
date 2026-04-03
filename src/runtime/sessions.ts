@@ -167,6 +167,7 @@ function writeTempJson(dir: string, fileName: string, data: unknown): string {
 
 function runQueryHelper(payload: {
   acpBackend?: "gemini" | "opencode";
+  agentName?: string;
   backend: SessionBackend;
   liveTracePath?: string | null;
   maxTurns: number;
@@ -181,12 +182,13 @@ function runQueryHelper(payload: {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "simple-runner-helper-"));
   const payloadPath = writeTempJson(tempDir, "payload.json", payload);
   const outputPath = path.join(tempDir, "result.json");
+  const loge = process.env.SIMPLE_RUNNER_LOGE === "1";
   const helper = spawnSync(process.execPath, [queryHelperPath(), payloadPath, outputPath], {
     encoding: "utf8",
     env: buildWorkerEnv(),
     killSignal: "SIGKILL",
     maxBuffer: MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", loge ? "inherit" : "pipe", "pipe"],
     timeout: (payload.timeoutS ?? DEFAULT_TIMEOUT_S) * 1000 + 5_000,
   });
 
@@ -274,6 +276,52 @@ export function classifySessionError(
   return null;
 }
 
+function logeEnabled(): boolean {
+  return process.env.SIMPLE_RUNNER_LOGE === "1";
+}
+
+function formatTokenCount(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "?";
+}
+
+function writeLogeLine(text: string): void {
+  process.stderr.write(`${text}\n`);
+}
+
+function writeSessionProgress(
+  kind: "start" | "end",
+  details: {
+    agentName?: string;
+    backend: string;
+    elapsedS?: number;
+    errorCode?: string | null;
+    inputTokens?: number | null;
+    isError?: boolean;
+    model: string;
+    outputTokens?: number | null;
+    sessionId?: string | null;
+  },
+): void {
+  if (!logeEnabled()) {
+    return;
+  }
+
+  const agent = details.agentName ?? "session";
+  if (kind === "start") {
+    writeLogeLine(`[${agent}] start ${details.backend} ${details.model}`);
+    return;
+  }
+
+  const status = details.isError ? "error" : "done";
+  const elapsed =
+    typeof details.elapsedS === "number" ? `${details.elapsedS.toFixed(1)}s` : "?s";
+  const tokens = `in:${formatTokenCount(details.inputTokens)} out:${formatTokenCount(details.outputTokens)}`;
+  const errorSuffix =
+    details.isError && details.errorCode ? ` code:${details.errorCode}` : "";
+  const sessionSuffix = details.sessionId ? ` session:${details.sessionId}` : "";
+  writeLogeLine(`[${agent}] ${status} ${elapsed} ${tokens}${errorSuffix}${sessionSuffix}`);
+}
+
 class AcpSession implements Session {
   readonly backend: SessionBackend;
   readonly costBucket: string;
@@ -309,7 +357,9 @@ class AcpSession implements Session {
     resumeSessionIdOverride?: string | null,
   ): {
     acpBackend: "gemini" | "opencode";
+    agentName?: string;
     backend: SessionBackend;
+    liveTracePath?: string | null;
     maxTurns: number;
     model: string;
     projectDir: string;
@@ -326,6 +376,7 @@ class AcpSession implements Session {
 
     return {
       acpBackend: this.#acpBackend,
+      agentName: options.agentName,
       backend: this.backend,
       liveTracePath:
         typeof options.agentName === "string" && typeof options.queryIndex === "number"
@@ -402,6 +453,18 @@ class AcpSession implements Session {
       });
     }
 
+    writeSessionProgress("end", {
+      agentName: options.agentName,
+      backend: this.backend,
+      elapsedS: helperResult.elapsedS,
+      errorCode: helperResult.errorCode ?? null,
+      inputTokens: helperResult.inputTokens ?? null,
+      isError: helperResult.isError,
+      model: this.model,
+      outputTokens: helperResult.outputTokens ?? null,
+      sessionId: this.#sessionId,
+    });
+
     return {
       acpBackend: helperResult.acpBackend ?? this.#acpBackend,
       conversationLog,
@@ -455,6 +518,11 @@ class AcpSession implements Session {
       prompt: helperPayload.prompt,
       session_id: this.#sessionId,
       project_dir: options.projectDir,
+    });
+    writeSessionProgress("start", {
+      agentName: options.agentName,
+      backend: this.backend,
+      model: this.model,
     });
 
     const helperResult = runQueryHelper({

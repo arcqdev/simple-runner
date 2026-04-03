@@ -303,7 +303,7 @@ afterEach(() => {
 });
 
 describe("ACP sessions", () => {
-  it("injects resume ids through ACP session.load for Gemini and OpenCode", () => {
+  it("injects resume ids through ACP session/load for Gemini and OpenCode", () => {
     const binDir = makeTempDir("simple-runner-bin");
     installFakeGemini(binDir);
     installFakeOpencode(binDir);
@@ -324,9 +324,9 @@ describe("ACP sessions", () => {
     expect(geminiRequests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          method: "session.load",
+          method: "session/load",
           params: expect.objectContaining({
-            locator: { conversationId: "gemini-session-1" },
+            sessionId: "gemini-session-1",
           }),
         }),
       ]),
@@ -346,9 +346,9 @@ describe("ACP sessions", () => {
     expect(opencodeRequests).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          method: "session.load",
+          method: "session/load",
           params: expect.objectContaining({
-            locator: { conversationId: "thread-9" },
+            sessionId: "thread-9",
           }),
         }),
       ]),
@@ -501,7 +501,7 @@ describe("ACP sessions", () => {
     expect(session?.sessionId).toBe("thread-9");
 
     const opencodeRequests = readFileSync(path.join(projectDir, "opencode-acp-requests.jsonl"), "utf8");
-    expect(opencodeRequests).toContain('"method":"session.create"');
+    expect(opencodeRequests).toContain('"method":"session/new"');
   });
 
   it("reports OpenCode ACP auth failures against Gemini credentials clearly", () => {
@@ -571,7 +571,7 @@ describe("runtime integration", () => {
     expect(log).toContain('"session_id":"gemini-session-1"');
 
     io.restore();
-  });
+  }, 15000);
 
   it("runs the CLI through the ACP session layer when opencode is selected", () => {
     const homeDir = makeTempDir("simple-runner-home");
@@ -622,7 +622,7 @@ describe("runtime integration", () => {
     expect(log).toContain('"session_id":"thread-9"');
 
     io.restore();
-  });
+  }, 15000);
 
   it("resumes an interrupted Gemini ACP run through CLI resume semantics", () => {
     const homeDir = makeTempDir("simple-runner-home");
@@ -733,7 +733,7 @@ describe("runtime integration", () => {
     expect(runCli(["--resume", runId, "--project", projectDir, "--yes"])).toBe(0);
 
     const requests = readFileSync(path.join(projectDir, "gemini-acp-requests.jsonl"), "utf8");
-    expect(requests).toContain('"method":"session.load"');
+    expect(requests).toContain('"method":"session/load"');
     const resumedLog = readFileSync(path.join(runRoot, "log.jsonl"), "utf8");
     expect(resumedLog).toContain('"event":"run_resumed"');
     expect(resumedLog).toContain('"acp_backend":"gemini"');

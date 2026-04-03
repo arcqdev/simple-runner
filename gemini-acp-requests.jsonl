@@ -28,3 +28,15 @@
 {"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
 {"id":1,"jsonrpc":"2.0","method":"initialize","params":{"clientName":"kodo-preflight","clientVersion":"0","protocolVersion":"0.1","requestedCapabilities":{"initialize":true,"prompt":true,"resume":true,"sessionLifecycle":true,"streaming":true,"usage":true}}}
 {"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}
+{"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}
+{"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}
+{"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}
+{"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}
+{"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false}}}}
+{"id":2,"jsonrpc":"2.0","method":"shutdown","params":{}}

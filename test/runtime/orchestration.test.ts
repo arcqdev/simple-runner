@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ResolvedGoal, ResolvedRuntimeParams } from "../../src/cli/runtime.js";
 import { RunDir, init } from "../../src/logging/log.js";
@@ -51,6 +51,7 @@ function projectFlags(projectDir: string): {
   help: false;
   improve: false;
   json: false;
+  loge: false;
   noAutoCommit: boolean;
   orchestrator: string;
   project: string;
@@ -75,6 +76,7 @@ function projectFlags(projectDir: string): {
     help: false,
     improve: false,
     json: false,
+    loge: false,
     noAutoCommit: true,
     orchestrator: "gemini-cli:gemini-3-flash",
     project: projectDir,
@@ -108,6 +110,7 @@ function buildGoal(goalText = "Ship it"): ResolvedGoal {
 
 afterEach(() => {
   process.env.PATH = ORIGINAL_PATH;
+  vi.unstubAllEnvs();
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.FAKE_AGENT_STATE_DIR;
   } else {
@@ -142,7 +145,8 @@ describe("orchestration helpers", () => {
 });
 
 describe("ACP orchestration", () => {
-  it("falls back to the synthetic runtime when a legacy orchestrator is selected", () => {
+  it("fails fast when a live orchestrator has no runtime adapter", () => {
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "1");
     const projectDir = makeTempDir("legacy-project");
     const runDir = RunDir.create(projectDir, "legacy_runtime");
     init(runDir);
@@ -161,14 +165,12 @@ describe("ACP orchestration", () => {
       "utf8",
     );
 
-    const result = executePendingRun(runDir, buildParams("codex", "gpt-5.4"), buildGoal(), {
-      ...projectFlags(projectDir),
-      orchestrator: "codex:gpt-5.4",
-    });
-
-    expect(result.finished).toBe(true);
-    expect(result.summary).toContain("codex");
-    expect(readFileSync(runDir.logFile, "utf8")).toContain('"event":"orchestrator_fallback"');
+    expect(() =>
+      executePendingRun(runDir, buildParams("codex", "gpt-5.4"), buildGoal(), {
+        ...projectFlags(projectDir),
+        orchestrator: "codex:gpt-5.4",
+      }),
+    ).toThrow("has no live runtime adapter");
   });
 });
 

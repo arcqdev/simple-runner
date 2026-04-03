@@ -172,13 +172,32 @@ export class StdioAcpTransport {
       },
     );
 
-    if (!isJsonObject(result) || !isJsonObject(result.capabilities)) {
+    if (!isJsonObject(result)) {
       throw runtimeError("initialize_failed", "ACP initialize response was malformed.", {
-        details: isJsonObject(result) ? result : null,
+        details: null,
       });
     }
 
-    return result as AcpInitializeResult;
+    if (isJsonObject(result.agentCapabilities)) {
+      return result as AcpInitializeResult;
+    }
+
+    if (isJsonObject(result.capabilities)) {
+      const legacy = result.capabilities;
+      const agentInfo = toJsonObject({
+        name: stringField(legacy, "serverName"),
+        version: stringField(legacy, "serverVersion"),
+      });
+      return {
+        agentCapabilities: legacy,
+        agentInfo,
+        protocolVersion: numberField(legacy, "protocolVersion") ?? ACP_PROTOCOL_VERSION,
+      };
+    }
+
+    throw runtimeError("initialize_failed", "ACP initialize response was malformed.", {
+      details: result,
+    });
   }
 
   async request(

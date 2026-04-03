@@ -62,6 +62,36 @@ describe("runCli main shell", () => {
     io.restore();
   });
 
+  it("supports loge mode as a main alias", () => {
+    const project = makeProjectDir();
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "0");
+    const io = captureOutput();
+
+    expect(runCli(["loge", "--goal", "ship it", "--skip-intake", "--yes", "--project", project])).toBe(
+      0,
+    );
+    expect(io.stdout()).toContain("Run completed.");
+    expect(io.stdout()).toContain("Loge: enabled");
+    io.restore();
+  });
+
+  it("routes --view-past-runs through the logs flow", () => {
+    const homeDir = makeRunsHome();
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    const project = path.join(homeDir, "project");
+    writeRunFixture(homeDir, {
+      runId: "20260322_120000",
+      projectDir: project,
+      goal: "Viewer run",
+    });
+    const io = captureOutput();
+
+    expect(runCli(["--view-past-runs"])).toBe(0);
+    expect(io.stdout()).toContain("Log viewer:");
+    expect(io.stdout()).toContain("Log file:");
+    io.restore();
+  });
+
   it("returns JSON help when requested", () => {
     const io = captureOutput();
 
@@ -90,6 +120,27 @@ describe("runCli main shell", () => {
       status: "error",
       error: "--goal must not be empty or whitespace-only.",
     });
+    io.restore();
+  });
+
+  it("fails fast when a live orchestrator has no runtime adapter", () => {
+    const project = makeProjectDir();
+    vi.stubEnv("SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME", "1");
+    const io = captureOutput();
+
+    expect(
+      runCli([
+        "--goal",
+        "ship it",
+        "--skip-intake",
+        "--yes",
+        "--project",
+        project,
+        "--orchestrator",
+        "codex:gpt-5.4-nano",
+      ]),
+    ).toBe(1);
+    expect(io.stderr()).toContain("has no live runtime adapter");
     io.restore();
   });
 

@@ -7,7 +7,7 @@ import type { GoalMode, MainFlags, ParsedMain } from "./types.js";
 const EFFORT_VALUES = new Set(["low", "standard", "high", "max"]);
 const SINGULAR_SUBCOMMANDS = new Set(["run", "backend", "team", "log", "issue", "help"]);
 const PLURAL_SUBCOMMANDS = new Set(["runs", "backends", "teams", "logs", "issues", "update"]);
-const MAIN_ALIAS_COMMANDS = new Set(["test", "improve"]);
+const MAIN_ALIAS_COMMANDS = new Set(["test", "improve", "loge"]);
 const KNOWN_TOP_LEVEL = new Set([
   ...SINGULAR_SUBCOMMANDS,
   ...PLURAL_SUBCOMMANDS,
@@ -74,6 +74,7 @@ function buildDefaultFlags(): MainFlags {
     help: false,
     improve: false,
     json: false,
+    loge: false,
     noAutoCommit: false,
     orchestrator: null,
     project: ".",
@@ -126,6 +127,9 @@ export function parseMainArgs(argv: string[]): ParsedMain {
         break;
       case "--json":
         flags.json = true;
+        break;
+      case "--loge":
+        flags.loge = true;
         break;
       case "--yes":
       case "-y":

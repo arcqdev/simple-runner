@@ -29,6 +29,7 @@ export type MainFlags = {
   help: boolean;
   improve: boolean;
   json: boolean;
+  loge: boolean;
   noAutoCommit: boolean;
   orchestrator: string | null;
   project: string;

@@ -4,11 +4,12 @@
   "private": true,
   "bin": {
     "simple-runner": "./dist/cli.js",
+    "simple-runner-acp": "./dist/runner-acp.js",
     "simple-runner-viewer": "./dist/viewer-cli.js"
   },
   "type": "module",
   "scripts": {
-    "build": "vite build && chmod +x dist/cli.js dist/viewer-cli.js",
+    "build": "vite build && chmod +x dist/cli.js dist/runner-acp.js dist/viewer-cli.js",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
     "dev": "vite-node src/cli.ts",
     "e2e:docker": "docker build -f e2e/docker/Dockerfile -t simple-runner-e2e . && docker run --rm simple-runner-e2e",

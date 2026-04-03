@@ -274,21 +274,24 @@ export function executePendingRun(
     });
 
     const sessionBackend = backendForOrchestrator(params.orchestrator);
-    if (
-      !shouldUseSessionRuntime() ||
-      process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME === "0" ||
-      (sessionBackend === null && !canRunNativeOrchestrator(params.orchestrator)) ||
-      (sessionBackend !== null && !availableBackends()[sessionBackend])
-    ) {
+    if (!shouldUseSessionRuntime() || process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME === "0") {
       const reason = !shouldUseSessionRuntime()
         ? "Session runtime disabled for this environment"
-        : process.env.SIMPLE_RUNNER_ENABLE_SESSION_RUNTIME === "0"
-          ? "Session runtime explicitly disabled"
-          : sessionBackend === null
-            ? `No session adapter for orchestrator ${params.orchestrator}`
-            : `Backend ${sessionBackend} is not installed; using synthetic runtime fallback`;
+        : "Session runtime explicitly disabled";
       result = syntheticExecutionResult(runDir, params, goal, flags, reason);
       return result;
+    }
+
+    if (sessionBackend === null && !canRunNativeOrchestrator(params.orchestrator)) {
+      throw new Error(
+        `Orchestrator '${params.orchestrator}' has no live runtime adapter. Use 'opencode', 'gemini-cli', or 'pi', or disable the session runtime if you want synthetic execution.`,
+      );
+    }
+
+    if (sessionBackend !== null && !availableBackends()[sessionBackend]) {
+      throw new Error(
+        `Orchestrator backend '${sessionBackend}' is unavailable. Install it or choose a different live orchestrator.`,
+      );
     }
 
     const runtime = runOrchestration(runDir, params, goal, flags);
@@ -486,6 +489,7 @@ export function resumeRun(target: ResumeTarget): ExecutionResult {
     help: false,
     improve: inferGoalSource(runDir) === "improve",
     json: false,
+    loge: false,
     noAutoCommit: !params.autoCommit,
     orchestrator: params.orchestratorModel,
     project: state.projectDir,
