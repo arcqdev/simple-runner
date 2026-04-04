@@ -20,6 +20,13 @@ npm install
 npm run build
 ```
 
+With `pnpm`:
+
+```bash
+pnpm install
+pnpm run build
+```
+
 Run it directly from the repo:
 
 ```bash
@@ -32,10 +39,26 @@ If you want the binary on your `PATH`:
 npm link
 ```
 
+Or with `pnpm`:
+
+```bash
+pnpm link --global
+```
+
 Then you can use:
 
 ```bash
 simple-runner --help
+```
+
+The linked CLI continues to point at this checkout. Since the package `bin`
+entries resolve to files under `dist/`, each fresh `npm run build` or
+`pnpm run build` updates what the linked `simple-runner` command executes.
+If you want near-live updates while developing, run a build watcher in another
+terminal:
+
+```bash
+npx vite build --watch
 ```
 
 ## Basic Usage
